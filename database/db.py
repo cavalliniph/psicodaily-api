@@ -8,14 +8,14 @@ DIRNAME = os.path.dirname(__file__)
 
 def get_connection():
     try:
-        conn = fdb.connect(
+        con = fdb.connect(
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             host=os.getenv("DB_HOST"),
             database=os.path.join(DIRNAME, "BANCO.FDB"),
         )
-        return conn
+        return con
     except Exception as e:
         print(f"erro ao conectar ao banco: {str(e)}")
 
-conn = get_connection()
+con = get_connection()
