@@ -1,10 +1,9 @@
-import os
-import random
-import secrets
+from funcao import enviar_email, gerar_token, criar_hash_senha, senha_correta, validar_email, validar_senha, validar_cpf, validar_telefone
 from flask import Blueprint, current_app, jsonify, make_response, request
 from database.db import con
-from funcao import enviar_email, gerar_token, criar_hash_senha, senha_correta, validar_senha
 import threading
+import secrets
+import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
@@ -74,6 +73,17 @@ def cadastro():
 
 		if usuario:
 			return jsonify({ "error": "Usuario ja cadastrado" }), 400
+
+		# validando os campos obrigatorios
+
+		if not validar_cpf(cpf):
+			return jsonify({ "error": "CPF invalido" }), 400
+
+		if not validar_email(email):
+			return jsonify({ "error": "Email invalido" }), 400
+
+		if not validar_telefone(telefone):
+			return jsonify({ "error": "Telefone invalido" }), 400
 
 		if not validar_senha(senha):
 			return jsonify({ "error": "Senha nao atende aos requisitos" }), 400

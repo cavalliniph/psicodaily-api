@@ -3,6 +3,7 @@ import smtplib
 from flask import current_app
 from flask_bcrypt import check_password_hash, generate_password_hash
 import jwt
+import re
 
 def gerar_token(payload):
 	try:
@@ -58,3 +59,25 @@ def enviar_email(destinatario, assunto, mensagem):
         server.login(user, senha)
         server.send_message(msg)
         server.quit()
+
+def validar_cpf(cpf):
+	cpf = ''.join(filter(str.isdigit, cpf))
+
+	if len(cpf) != 11 or cpf == cpf[0] * 11:
+		return False
+
+	for i in range(9, 11):
+		soma = sum(int(cpf[j]) * (i + 1 - j) for j in range(i))
+		digito = (soma * 10 % 11) % 10
+		if digito != int(cpf[i]):
+			return False
+
+	return True
+
+def validar_email(email):
+	padrao = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+	return re.match(padrao, email) is not None
+
+def validar_telefone(telefone):
+	padrao = r'^\(?\d{2}\)?[\s-]?\d{4,5}-?\d{4}$'
+	return re.match(padrao, telefone) is not None  
