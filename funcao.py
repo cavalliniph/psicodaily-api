@@ -1,3 +1,5 @@
+from email.mime.text import MIMEText
+import smtplib
 from flask import current_app
 from flask_bcrypt import check_password_hash, generate_password_hash
 import jwt
@@ -41,3 +43,18 @@ def validar_senha(senha: str):
     if not (maiuscula and minuscula and numero and especial):
         return False
     return True
+
+def enviar_email(destinatario, assunto, mensagem):
+        user = "psicodaily.contato@gmail.com"
+        senha = "hmdk zazs yrxn gylf"
+
+        msg = MIMEText(mensagem)
+        msg['Subject'] = assunto
+        msg['From'] = user
+        msg['To'] = destinatario
+
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+
+        server.login(user, senha)
+        server.send_message(msg)
+        server.quit()
