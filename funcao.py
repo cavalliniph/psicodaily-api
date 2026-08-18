@@ -1,7 +1,7 @@
 from flask import current_app
 import jwt
 
-def gerar_token(payload):
+def gerar_token(payload) -> str | None:
 	try:
 		token = jwt.encode(
             payload,
