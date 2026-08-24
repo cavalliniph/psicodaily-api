@@ -7,10 +7,10 @@ import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
-@auth_bp.route('/login', methods=['GET'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
 	try:
-		data = request.json
+		data = request.get_json(silent=True) or {}
 		
 		email = data.get('email')
 		senha = data.get('senha')
@@ -43,6 +43,10 @@ def login():
 		
 		response = make_response({
 			"message": "Usuario logado com sucesso",
+			"usuario": {
+				"id_usuario": usuario[0],
+				"tipo_usuario": usuario[3]
+			}
 		})
 
 		response.set_cookie("access_token", token)
@@ -122,7 +126,7 @@ def cadastro():
 @auth_bp.route('/verificar_codigo', methods=['POST'])
 def verificar_codigo():
 	try:
-		data = request.json
+		data = request.get_json(silent=True) or {}
 
 		if not data:
 			return jsonify({ "error": "Formato invalido" }), 400
@@ -149,5 +153,68 @@ def verificar_codigo():
 		return jsonify({ "message": "Email verificado com sucesso" }), 200
 	except Exception as e:
 		print(f"houve um erro ao verificar o codigo: {str(e)}")
+		con.rollback()
+		return jsonify({ "error": "Internal server error" }), 500
+
+@auth_bp.route('/esqueci_senha', methods=['POST'])
+def esqueci_senha():
+	try:
+		data = request.get_json(silent=True) or {}
+		email = data.get('email')
+
+		if not email:
+			return jsonify({ "error": "Email e obrigatorio" }), 400
+
+		cursor = con.cursor()
+		cursor.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
+		usuario = cursor.fetchone()
+
+		if not usuario:
+			return jsonify({ "error": "Usuario nao encontrado" }), 404
+
+		codigo = f"{secrets.randbelow(1000000):06d}"
+		cursor.execute("UPDATE usuario SET codigo = ? WHERE id_usuario = ?", (codigo, usuario[0]))
+		con.commit()
+
+		threading.Thread(
+			target=enviar_email,
+			args=(email, "Recuperacao de senha", f"Seu codigo para alterar a senha e: {codigo}")
+		).start()
+
+		return jsonify({ "message": "Codigo enviado para o e-mail" }), 200
+	except Exception as e:
+		print(f"houve um erro ao solicitar recuperacao: {str(e)}")
+		con.rollback()
+		return jsonify({ "error": "Internal server error" }), 500
+
+@auth_bp.route('/alterar_senha', methods=['POST'])
+def alterar_senha():
+	try:
+		data = request.get_json(silent=True) or {}
+		codigo = data.get('codigo')
+		nova_senha = data.get('senha')
+
+		if not codigo or not nova_senha:
+			return jsonify({ "error": "Codigo e senha sao obrigatorios" }), 400
+
+		if not validar_senha(nova_senha):
+			return jsonify({ "error": "Senha nao atende aos requisitos" }), 400
+
+		cursor = con.cursor()
+		cursor.execute("SELECT id_usuario FROM usuario WHERE codigo = ?", (codigo,))
+		usuario = cursor.fetchone()
+
+		if not usuario:
+			return jsonify({ "error": "Codigo invalido" }), 401
+
+		cursor.execute(
+			"UPDATE usuario SET senha = ?, codigo = NULL WHERE id_usuario = ?",
+			(criar_hash_senha(nova_senha), usuario[0])
+		)
+		con.commit()
+
+		return jsonify({ "message": "Senha alterada com sucesso" }), 200
+	except Exception as e:
+		print(f"houve um erro ao alterar a senha: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
