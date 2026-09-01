@@ -546,3 +546,4 @@ def alterar_senha():
 		print(f"houve um erro ao alterar a senha: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+
