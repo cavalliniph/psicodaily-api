@@ -1,6 +1,6 @@
 from funcao import enviar_email, gerar_token, criar_hash_senha, senha_correta, validar_email, validar_senha, validar_cpf, validar_telefone
 from flask import Blueprint, current_app, jsonify, make_response, request
-from database.db import con
+from database.db import get_connection
 from decimal import Decimal, InvalidOperation
 import json
 import re
@@ -104,7 +104,7 @@ def enviar_email_ativacao(email, codigo):
 	).start()
 
 
-def criar_usuario_base(cursor, formulario, usuario_role, exigir_confirmacao_senha=False):
+def criar_usuario_base(cur, formulario, usuario_role, exigir_confirmacao_senha=False):
 	imagem = request.files.get('imagem')
 	email = obter_campo(formulario, 'email')
 	nome = obter_campo(formulario, 'nome')
@@ -140,24 +140,29 @@ def criar_usuario_base(cursor, formulario, usuario_role, exigir_confirmacao_senh
 	if not validar_imagem_usuario(imagem):
 		return None, resposta_erro("Imagem deve ser um arquivo JPG ou JPEG")
 
-	cursor.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
+	cur.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
 
-	if cursor.fetchone():
+	if cur.fetchone():
 		return None, resposta_erro("Usuario ja cadastrado")
 
-	cursor.execute("SELECT id_usuario FROM usuario WHERE cpf = ?", (cpf,))
+	cur.execute("SELECT id_usuario FROM usuario WHERE cpf = ?", (cpf,))
 
-	if cursor.fetchone():
+	if cur.fetchone():
 		return None, resposta_erro("CPF ja cadastrado")
 
 	senha_hash = criar_hash_senha(senha)
 	codigo = f"{secrets.randbelow(1000000):06d}"
 
-	cursor.execute("""INSERT INTO usuario (nome, email, telefone, senha, cpf, codigo, usuario_role)
+	cur.execute("""INSERT INTO usuario (nome, email, telefone, senha, cpf, codigo, usuario_role)
 					  VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id_usuario""",
 			 (nome, email, telefone, senha_hash, cpf, codigo, usuario_role))
 
-	id_usuario = cursor.fetchone()[0]
+	usuario_criado = cur.fetchone()
+
+	if usuario_criado is None:
+		raise RuntimeError("Banco nao retornou o usuario criado")
+
+	id_usuario = usuario_criado[0]
 	salvar_imagem_usuario(imagem, id_usuario)
 
 	return {
@@ -271,18 +276,20 @@ def normalizar_conselho(valor, conselho_tipo):
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
 		data = request.get_json(silent=True) or {}
-		
+
 		email = data.get('email')
 		senha = data.get('senha')
 
 		if not email or not senha:
 			return jsonify({ "error": "Email e senha sao obrigatorios" }), 400
 
-		cursor = con.cursor()
-		cursor.execute("SELECT id_usuario, senha, ativo, usuario_role FROM usuario WHERE email = ?", (email,))
-		usuario = cursor.fetchone()
+		cur.execute("SELECT id_usuario, senha, ativo, usuario_role FROM usuario WHERE email = ?", (email,))
+		usuario = cur.fetchone()
 
 		if not usuario:
 			return jsonify({ "error": "Usuario nao encontrado" }), 404
@@ -299,10 +306,10 @@ def login():
 		}
 
 		token = gerar_token(payload)
-		
+
 		if not token:
 			raise RuntimeError("Erro ao gerar token")
-		
+
 		response = make_response({
 			"message": "Usuario logado com sucesso",
 			"usuario": {
@@ -317,16 +324,24 @@ def login():
 	except Exception as e:
 		print(str(e))
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
 # cadastro de cliente comum
 @auth_bp.route('/cadastro', methods=['POST'])
 def cadastro():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
-		cursor = con.cursor()
-		usuario, erro = criar_usuario_base(cursor, request.form, 'PACIENTE')
+		usuario, erro = criar_usuario_base(cur, request.form, 'PACIENTE')
 
 		if erro:
 			return erro
+
+		if usuario is None:
+			raise RuntimeError("Cadastro nao retornou os dados do usuario")
 
 		con.commit()
 		enviar_email_ativacao(usuario["email"], usuario["codigo"])
@@ -344,9 +359,15 @@ def cadastro():
 		print(f"houve um erro ao realizar o cadastro: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
 @auth_bp.route('/cadastro_profissional', methods=['POST'])
 def cadastro_profissional():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
 		formulario = request.form
 		especialidade_recebida = obter_campo(formulario, 'especialidade')
@@ -408,9 +429,8 @@ def cadastro_profissional():
 		if erro_dias:
 			return resposta_erro(erro_dias)
 
-		cursor = con.cursor()
 		usuario, erro = criar_usuario_base(
-			cursor,
+			cur,
 			formulario,
 			configuracao_profissional["usuario_role"],
 			exigir_confirmacao_senha=True
@@ -419,7 +439,10 @@ def cadastro_profissional():
 		if erro:
 			return erro
 
-		cursor.execute("""INSERT INTO profissional (
+		if usuario is None:
+			raise RuntimeError("Cadastro nao retornou os dados do usuario")
+
+		cur.execute("""INSERT INTO profissional (
 							usuario_id,
 							conselho_tipo,
 							conselho_numero,
@@ -450,9 +473,15 @@ def cadastro_profissional():
 		print(f"houve um erro ao realizar o cadastro profissional: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
 @auth_bp.route('/verificar_codigo', methods=['POST'])
 def verificar_codigo():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
 		data = request.get_json(silent=True) or {}
 
@@ -465,9 +494,8 @@ def verificar_codigo():
 		if not email or not codigo:
 			return jsonify({ "error": "Email e codigo sao obrigatorios" }), 400
 
-		cursor = con.cursor()
-		cursor.execute("SELECT id_usuario, codigo FROM usuario WHERE email = ?", (email,))
-		usuario = cursor.fetchone()
+		cur.execute("SELECT id_usuario, codigo FROM usuario WHERE email = ?", (email,))
+		usuario = cur.fetchone()
 
 		if not usuario:
 			return jsonify({ "error": "Usuario nao encontrado" }), 404
@@ -475,7 +503,7 @@ def verificar_codigo():
 		if usuario[1] != codigo:
 			return jsonify({ "error": "Codigo invalido" }), 401
 
-		cursor.execute("UPDATE usuario SET ativo = true, codigo = NULL WHERE id_usuario = ?", (usuario[0],))
+		cur.execute("UPDATE usuario SET ativo = true, codigo = NULL WHERE id_usuario = ?", (usuario[0],))
 		con.commit()
 
 		return jsonify({ "message": "Email verificado com sucesso" }), 200
@@ -483,9 +511,15 @@ def verificar_codigo():
 		print(f"houve um erro ao verificar o codigo: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
 @auth_bp.route('/esqueci_senha', methods=['POST'])
 def esqueci_senha():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
 		data = request.get_json(silent=True) or {}
 		email = data.get('email')
@@ -493,15 +527,14 @@ def esqueci_senha():
 		if not email:
 			return jsonify({ "error": "Email e obrigatorio" }), 400
 
-		cursor = con.cursor()
-		cursor.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
-		usuario = cursor.fetchone()
+		cur.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
+		usuario = cur.fetchone()
 
 		if not usuario:
 			return jsonify({ "error": "Usuario nao encontrado" }), 404
 
 		codigo = f"{secrets.randbelow(1000000):06d}"
-		cursor.execute("UPDATE usuario SET codigo = ? WHERE id_usuario = ?", (codigo, usuario[0]))
+		cur.execute("UPDATE usuario SET codigo = ? WHERE id_usuario = ?", (codigo, usuario[0]))
 		con.commit()
 
 		threading.Thread(
@@ -514,9 +547,15 @@ def esqueci_senha():
 		print(f"houve um erro ao solicitar recuperacao: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
 @auth_bp.route('/alterar_senha', methods=['POST'])
 def alterar_senha():
+	con = get_connection()
+	cur = con.cursor()
+
 	try:
 		data = request.get_json(silent=True) or {}
 		codigo = data.get('codigo')
@@ -528,14 +567,13 @@ def alterar_senha():
 		if not validar_senha(nova_senha):
 			return jsonify({ "error": "Senha nao atende aos requisitos" }), 400
 
-		cursor = con.cursor()
-		cursor.execute("SELECT id_usuario FROM usuario WHERE codigo = ?", (codigo,))
-		usuario = cursor.fetchone()
+		cur.execute("SELECT id_usuario FROM usuario WHERE codigo = ?", (codigo,))
+		usuario = cur.fetchone()
 
 		if not usuario:
 			return jsonify({ "error": "Codigo invalido" }), 401
 
-		cursor.execute(
+		cur.execute(
 			"UPDATE usuario SET senha = ?, codigo = NULL WHERE id_usuario = ?",
 			(criar_hash_senha(nova_senha), usuario[0])
 		)
@@ -546,4 +584,7 @@ def alterar_senha():
 		print(f"houve um erro ao alterar a senha: {str(e)}")
 		con.rollback()
 		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
 
