@@ -170,4 +170,3 @@ def alterar_senha():
 	finally:
 		if cur is not None:
 			cur.close()
-

@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from datetime import datetime
 from database.db import get_connection
 from funcao import (
 	ESPECIALIDADES_PROFISSIONAIS,
@@ -25,6 +26,7 @@ def profissionais():
 		for nome, padrao, limite in (
 			('page_size', 10, 100),
 			('page', 1, LIMITE_PAGINACAO),
+			('preco_min', None, LIMITE_PAGINACAO),
 			('preco_max', None, LIMITE_PAGINACAO),
 		):
 			valor = request.args.get(nome, padrao)
@@ -44,11 +46,43 @@ def profissionais():
 
 		page_size = parametros['page_size']
 		page = parametros['page']
+		preco_min = parametros.get('preco_min')
 		preco_max = parametros.get('preco_max')
-		conselho = request.args.get('tipo_conselho', 'crp').strip().upper()
+
+		if preco_min is not None and preco_max is not None and preco_min > preco_max:
+			return resposta_erro('preco_min nao pode ser maior que preco_max')
+
+		especialidade = None
+		if 'especialidade' in request.args:
+			especialidade_recebida = normalizar_texto(request.args['especialidade'].strip())
+			especialidade = next(
+				(nome for nome in ESPECIALIDADES_PROFISSIONAIS if normalizar_texto(nome) == especialidade_recebida),
+				None,
+			)
+			if especialidade is None:
+				return resposta_erro('Especialidade deve ser Psicologia ou Psiquiatria')
+
+		conselho_padrao = ESPECIALIDADES_PROFISSIONAIS[especialidade]['conselho_tipo'] if especialidade else 'CRP'
+		conselho = request.args.get('tipo_conselho', conselho_padrao).strip().upper()
 
 		if conselho not in ('CRP', 'CRM'):
 			return jsonify({ 'error': 'tipo_conselho deve ser CRP ou CRM' }), 400
+
+		if especialidade and conselho != conselho_padrao:
+			return resposta_erro('tipo_conselho incompativel com a especialidade')
+
+		inicio = None
+		fim = None
+		if 'disponibilidade_inicio' in request.args or 'disponibilidade_fim' in request.args:
+			if not request.args.get('disponibilidade_inicio') or not request.args.get('disponibilidade_fim'):
+				return resposta_erro('Informe disponibilidade_inicio e disponibilidade_fim juntos')
+			try:
+				inicio = datetime.strptime(request.args['disponibilidade_inicio'], '%Y-%m-%dT%H:%M')
+				fim = datetime.strptime(request.args['disponibilidade_fim'], '%Y-%m-%dT%H:%M')
+			except ValueError:
+				return resposta_erro('Disponibilidade deve usar o formato AAAA-MM-DDTHH:MM, sem fuso horario')
+			if fim <= inicio:
+				return resposta_erro('disponibilidade_fim deve ser posterior a disponibilidade_inicio')
 
 		offset = (page - 1) * page_size
 
@@ -61,11 +95,31 @@ def profissionais():
 		WHERE u.ATIVO = TRUE
 		AND LOWER(p.CONSELHO_TIPO) = LOWER(?)
 		"""
-		params: list[str | int] = [conselho]
+		params: list[str | int | datetime] = [conselho]
+
+		if especialidade is not None:
+			filtros += " AND LOWER(p.ESPECIALIDADE) = LOWER(?)"
+			params.append(especialidade)
+
+		if preco_min is not None:
+			filtros += " AND p.PRECO_HORA >= ?"
+			params.append(preco_min)
 
 		if preco_max is not None:
 			filtros += " AND p.PRECO_HORA BETWEEN 0 AND ?"
 			params.append(preco_max)
+
+		if inicio is not None and fim is not None:
+			filtros += """
+			AND NOT EXISTS (
+				SELECT 1 FROM SESSAO s
+				WHERE s.PROFISSIONAL_ID = p.USUARIO_ID
+				AND s.STATUS <> 'CANCELADO'
+				AND s.DATA_HORA_INICIO < ?
+				AND s.DATA_HORA_FIM > ?
+			)
+			"""
+			params.extend([fim, inicio])
 
 		query = """
 		SELECT FIRST ? SKIP ? u.ID_USUARIO
