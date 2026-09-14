@@ -75,19 +75,13 @@ def agendar_consulta():
           , DATA_HORA_FIM
           , VALOR
           , LINK_REUNIAO)
-        VALUES(13, 14 , ?, ?, ?, ?, (
+        VALUES(13, 14, ?, ?, ?, ?, (
                 SELECT preco_hora
                 FROM PROFISSIONAL p
                 WHERE p.USUARIO_ID = 14
             )
-        , ?);
+        , ?)
         """, (payload.get('id_usuario'), id_profissional))
-        query_res = cur.fetchone()
-
-        if query_res[0]:
-            cols = [col[0].lower() for col in cur.description]
-            sessao = dict(zip(cols, query_res[0]))
-            print(sessao)
 
         con.commit()
 

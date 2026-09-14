@@ -5,32 +5,9 @@ import jwt
 from database.db import get_connection
 from funcao import criar_usuario_base, enviar_email_ativacao
 from flask import Blueprint, current_app, jsonify, make_response, request, send_file
-
+from util.usuarios import usuario_autenticado
 
 usuarios_bp = Blueprint("usuarios", __name__, url_prefix="/api/usuarios")
-
-
-def usuario_autenticado(funcao):
-    @wraps(funcao)
-    def wrapper(*args, **kwargs):
-        token = request.cookies.get("access_token")
-
-        if not token:
-            return jsonify({"error": "Usuario nao autenticado"}), 401
-
-        try:
-            dados = jwt.decode(
-                token,
-                current_app.config["SECRET_KEY"],
-                algorithms=["HS256"],
-            )
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "Token invalido"}), 401
-
-        return funcao(dados, *args, **kwargs)
-
-    return wrapper
-
 
 @usuarios_bp.route("/me/avatar", methods=["GET"])
 @usuario_autenticado
