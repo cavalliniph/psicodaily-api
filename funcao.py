@@ -351,3 +351,6 @@ def normalizar_conselho(valor, conselho_tipo):
 			return texto
 
 	return None
+
+def decodificar_token(token):
+	return jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
