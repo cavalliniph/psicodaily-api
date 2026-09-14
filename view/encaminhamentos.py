@@ -32,12 +32,18 @@ def criar_encaminhamento(payload):
 
         cursor.execute("""
         INSERT INTO ENCAMINHAMENTO(PACIENTE_ID, PSICOLOGO_ID, CID, MOTIVO, STATUS)
-        VALUES(?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?) RETURNING *
         """, (id_usuario, payload.get('id_usuario'), id_cid or None, motivo, 'ATIVO'))
+
+        encam_criado = cursor.fetchone()
+        cols = [desc[0].lower() for desc in cursor.description]
 
         con.commit()
 
-        return jsonify({ 'message': 'Encaminhamento criado com sucesso' }), 201
+        return jsonify({
+            'message': 'Encaminhamento criado com sucesso',
+            'encaminhamento': dict(zip(cols, encam_criado))
+        }), 201
     except Exception as e:
         if con is not None:
             con.rollback()
