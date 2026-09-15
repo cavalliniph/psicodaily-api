@@ -52,6 +52,8 @@ def profissionais():
 		if preco_min is not None and preco_max is not None and preco_min > preco_max:
 			return resposta_erro('preco_min nao pode ser maior que preco_max')
 
+		nome = request.args.get('nome', '').strip()
+
 		especialidade = None
 		if 'especialidade' in request.args:
 			especialidade_recebida = normalizar_texto(request.args['especialidade'].strip())
@@ -62,10 +64,11 @@ def profissionais():
 			if especialidade is None:
 				return resposta_erro('Especialidade deve ser Psicologia ou Psiquiatria')
 
-		conselho_padrao = ESPECIALIDADES_PROFISSIONAIS[especialidade]['conselho_tipo'] if especialidade else 'CRP'
-		conselho = request.args.get('tipo_conselho', conselho_padrao).strip().upper()
+		conselho_padrao = ESPECIALIDADES_PROFISSIONAIS[especialidade]['conselho_tipo'] if especialidade else None
+		conselho_recebido = request.args.get('tipo_conselho')
+		conselho = conselho_recebido.strip().upper() if conselho_recebido else conselho_padrao
 
-		if conselho not in ('CRP', 'CRM'):
+		if conselho is not None and conselho not in ('CRP', 'CRM'):
 			return jsonify({ 'error': 'tipo_conselho deve ser CRP ou CRM' }), 400
 
 		if especialidade and conselho != conselho_padrao:
@@ -93,13 +96,20 @@ def profissionais():
 		FROM PROFISSIONAL p
 		INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
 		WHERE u.ATIVO = TRUE
-		AND LOWER(p.CONSELHO_TIPO) = LOWER(?)
 		"""
-		params: list[str | int | datetime] = [conselho]
+		params: list[str | int | datetime] = []
+
+		if conselho is not None:
+			filtros += " AND LOWER(p.CONSELHO_TIPO) = LOWER(?)"
+			params.append(conselho)
 
 		if especialidade is not None:
 			filtros += " AND LOWER(p.ESPECIALIDADE) = LOWER(?)"
 			params.append(especialidade)
+
+		if nome:
+			filtros += " AND UPPER(u.NOME) CONTAINING UPPER(?)"
+			params.append(nome)
 
 		if preco_min is not None:
 			filtros += " AND p.PRECO_HORA >= ?"
@@ -178,7 +188,7 @@ def profissional(id):
 			 , p.PRECO_HORA AS PRECO_CENTAVOS
 		FROM PROFISSIONAL p
 		INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
-		WHERE usuario_id = ?""", (id,))
+		WHERE p.USUARIO_ID = ? AND u.ATIVO = TRUE""", (id,))
 
 		resultado = cur.fetchone()
 
@@ -256,7 +266,7 @@ def cadastro_profissional():
 		preco_hora = normalizar_valor_sessao(valor_recebido)
 
 		if preco_hora is None:
-			return resposta_erro("Valor por sessao deve ser um numero inteiro positivo")
+			return resposta_erro("Valor em reais deve ser positivo, ate 100000, com no maximo duas casas decimais")
 
 		dias_atendimento, erro_dias = obter_dias_atendimento(formulario)
 

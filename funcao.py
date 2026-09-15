@@ -304,7 +304,8 @@ def obter_dias_atendimento(formulario):
 
 
 def normalizar_valor_sessao(valor):
-	texto = valor.replace("R$", "").replace(" ", "")
+	"""Converte a entrada em reais para centavos inteiros do banco."""
+	texto = str(valor).replace("R$", "").replace(" ", "")
 
 	if "," in texto and "." in texto:
 		texto = texto.replace(".", "").replace(",", ".")
@@ -316,13 +317,14 @@ def normalizar_valor_sessao(valor):
 	except InvalidOperation:
 		return None
 
-	if valor_decimal <= 0 or valor_decimal > Decimal("100000"):
+	if not valor_decimal.is_finite() or valor_decimal <= 0 or valor_decimal > Decimal("100000"):
 		return None
 
-	if valor_decimal != valor_decimal.to_integral_value():
+	centavos = valor_decimal * 100
+	if centavos != centavos.to_integral_value():
 		return None
 
-	return int(valor_decimal)
+	return int(centavos)
 
 
 def normalizar_conselho(valor, conselho_tipo):

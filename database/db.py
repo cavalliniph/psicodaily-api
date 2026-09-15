@@ -13,6 +13,7 @@ def get_connection():
             password=os.getenv("DB_PASSWORD"),
             host=os.getenv("DB_HOST"),
             database=os.path.join(DIRNAME, "BANCO.FDB"),
+            charset=os.getenv("DB_CHARSET", "UTF8"),
         )
         return con
     except Exception as e:

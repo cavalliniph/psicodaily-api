@@ -20,7 +20,7 @@ def login():
 		if not email or not senha:
 			return jsonify({ "error": "Email e senha sao obrigatorios" }), 400
 
-		cur.execute("SELECT id_usuario, senha, ativo, usuario_role FROM usuario WHERE email = ?", (email,))
+		cur.execute("SELECT id_usuario, senha, ativo, usuario_role, nome, email FROM usuario WHERE email = ?", (email,))
 		usuario = cur.fetchone()
 
 		if not usuario:
@@ -46,11 +46,20 @@ def login():
 			"message": "Usuario logado com sucesso",
 			"usuario": {
 				"id_usuario": usuario[0],
-				"tipo_usuario": usuario[3]
+				"tipo_usuario": usuario[3],
+				"nome": usuario[4],
+				"email": usuario[5]
 			}
 		})
 
-		response.set_cookie("access_token", token)
+		response.set_cookie(
+			'access_token',
+			token,
+			path='/',
+			httponly=True,
+			secure=False,
+			samesite='Lax',
+		)
 
 		return response
 	except Exception as e:
@@ -170,3 +179,9 @@ def alterar_senha():
 	finally:
 		if cur is not None:
 			cur.close()
+
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+	response = make_response(jsonify({ 'message': 'Logout realizado com sucesso' }), 200)
+	response.delete_cookie('access_token')
+	return response
