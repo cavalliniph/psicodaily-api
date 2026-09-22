@@ -2,6 +2,8 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         firebird4.0-server \
@@ -10,17 +12,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chown firebird:firebird /app/BANCO.FDB
+
 EXPOSE 8000
-EXPOSE 3050
 
 CMD service firebird4.0 start && \
     gunicorn \
-      --bind 0.0.0.0:8000 \
-      --access-logfile - \
-      --error-logfile - \
-      --capture-output \
-      app:app
+        --bind 0.0.0.0:8000 \
+        --access-logfile - \
+        --error-logfile - \
+        --capture-output \
+        app:app
