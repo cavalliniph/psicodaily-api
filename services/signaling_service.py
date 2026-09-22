@@ -46,7 +46,7 @@ class SignalingService:
             del self.rooms[room]
 
     def broadcast(self, sender, room, message):
-        if not room:
+        if not room or room not in self.rooms:
             return
 
         data = json.dumps(message)

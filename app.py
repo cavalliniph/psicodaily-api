@@ -10,7 +10,7 @@ from view.consultas import cons_bp
 from view.encaminhamentos import encam_bp
 from view.pagamentos import pagamentos_bp
 from flask_cors import CORS
-from pathlib import Path
+# from pathlib import Path
 
 from extensions.websocket import sock
 from view.signaling import signaling_bp
@@ -38,19 +38,9 @@ CORS(
     app,
     supports_credentials=True,
     origins=[
-        'http://localhost:5173',
-        'http://10.92.11.18:5173',
-        'https://10.92.11.18:5173'
+        'http://localhost:5173'
     ]
 )
 
 if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        ssl_context=(
-            "localhost+2.pem",
-            "localhost+2-key.pem"
-        )
-    )
-
+    app.run(host='0.0.0.0', port=5000)

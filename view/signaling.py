@@ -9,15 +9,7 @@ def signaling(ws):
     print("WS CONECTADO")
 
     try:
-        while True:
-            message = ws.receive()
-
-            if message is None:
-                break
-
-            print("RECEBIDO:", message)
-
-            ws.send(message)
+        signaling_service.handle_connection(ws)
 
     except Exception as e:
         print("ERRO WS:", repr(e))
