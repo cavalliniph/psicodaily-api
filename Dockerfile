@@ -2,17 +2,25 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        firebird4.0-server \
+        firebird4.0-utils \
         libfbclient2 \
     && rm -rf /var/lib/apt/lists/*
 
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
 EXPOSE 8000
+EXPOSE 3050
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "--log-level", "debug", "app:app"]
+CMD service firebird4.0 start && \
+    gunicorn \
+      --bind 0.0.0.0:8000 \
+      --access-logfile - \
+      --error-logfile - \
+      --capture-output \
+      app:app
