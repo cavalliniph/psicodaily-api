@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN chown firebird:firebird /app/BANCO.FDB
+RUN chown firebird:firebird /app/projeto/database/BANCO.FDB
 
 EXPOSE 8000
 
