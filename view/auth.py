@@ -57,8 +57,8 @@ def login():
 			token,
 			path='/',
 			httponly=True,
-			secure=False,
-			samesite='Lax',
+			secure=True,
+			samesite="None",
 		)
 
 		return response
