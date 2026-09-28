@@ -18,14 +18,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN chown firebird:firebird /app/projeto/database/BANCO.FDB
+RUN chown firebird:firebird /app/database/BANCO.FDB
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
-CMD /usr/lib/firebird/4.0/bin/firebird -i & \
-    exec gunicorn \
-        --bind 0.0.0.0:8000 \
-        --access-logfile - \
-        --error-logfile - \
-        --capture-output \
-        app:app
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
