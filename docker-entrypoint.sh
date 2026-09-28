@@ -11,7 +11,7 @@ printf "ALTER USER SYSDBA SET PASSWORD 'sysdba';\nCOMMIT;\n" | \
     /usr/bin/isql-fb \
     -user SYSDBA \
     -password "$PASS" \
-    /app/database/BANCO.FDB
+    127.0.0.1:/app/database/BANCO.FDB
 
 exec gunicorn \
     --bind 0.0.0.0:8000 \
