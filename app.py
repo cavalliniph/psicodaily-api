@@ -38,7 +38,8 @@ CORS(
     app,
     supports_credentials=True,
     origins=[
-        'http://localhost:5173'
+        'http://localhost:5173',
+        'https://psicodaily-front.vercel.app'
     ]
 )
 
