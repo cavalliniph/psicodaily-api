@@ -9,7 +9,10 @@ RUN apt-get update \
         firebird4.0-server \
         firebird4.0-utils \
         libfbclient2 \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=America/Sao_Paulo
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
