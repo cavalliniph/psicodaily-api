@@ -9,12 +9,9 @@ RUN apt-get update \
         firebird4.0-server \
         firebird4.0-utils \
         libfbclient2 \
-    && dpkg -l | grep -E 'firebird|libfbclient' \
-    && test -x /usr/lib/firebird/4.0/bin/firebird \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
@@ -23,7 +20,8 @@ RUN chown firebird:firebird /app/database/BANCO.FDB
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
