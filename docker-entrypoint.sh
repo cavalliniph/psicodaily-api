@@ -1,9 +1,11 @@
 #!/bin/sh
 set -e
 
-/usr/lib/firebird/4.0/bin/firebird -i &
+echo "Starting Firebird..."
 
-sleep 2
+ /usr/lib/firebird/4.0/bin/firebird -i &
+
+sleep 5
 
 PASS=$(grep "^ISC_PASSWORD=" /etc/firebird/4.0/SYSDBA.password | cut -d= -f2)
 
@@ -13,12 +15,7 @@ printf "ALTER USER SYSDBA SET PASSWORD 'sysdba';\nCOMMIT;\n" | \
     -password "$PASS" \
     127.0.0.1:/app/database/BANCO.FDB
 
-# exec gunicorn \
-#     --bind 0.0.0.0:8000 \
-#     --access-logfile - \
-#     --error-logfile - \
-#     --capture-output \
-#     app:app
+echo "Starting Gunicorn..."
 
 exec gunicorn \
     --worker-class gevent \
