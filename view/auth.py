@@ -71,41 +71,89 @@ def login():
 
 @auth_bp.route('/verificar_codigo', methods=['POST'])
 def verificar_codigo():
-	con = get_connection()
-	cur = con.cursor()
+    con = get_connection()
+    cur = con.cursor()
 
-	try:
-		data = request.get_json(silent=True) or {}
+    try:
+        data = request.get_json(silent=True) or {}
 
-		if not data:
-			return jsonify({ "error": "Formato invalido" }), 400
+        if not data:
+            return jsonify({
+                "error": "Formato invalido"
+            }), 400
 
-		email = data.get('email')
-		codigo = data.get('codigo')
+        email = data.get('email')
+        codigo = data.get('codigo')
 
-		if not email or not codigo:
-			return jsonify({ "error": "Email e codigo sao obrigatorios" }), 400
+        if not email or not codigo:
+            return jsonify({
+                "error": "Email e codigo sao obrigatorios"
+            }), 400
 
-		cur.execute("SELECT id_usuario, codigo FROM usuario WHERE email = ?", (email,))
-		usuario = cur.fetchone()
+        email = str(email).strip().lower()
+        codigo = str(codigo).strip()
 
-		if not usuario:
-			return jsonify({ "error": "Usuario nao encontrado" }), 404
+        print("EMAIL RECEBIDO:", email)
+        print("CODIGO RECEBIDO:", codigo)
 
-		if usuario[1] != codigo:
-			return jsonify({ "error": "Codigo invalido" }), 401
+        cur.execute(
+            """
+            SELECT id_usuario, codigo
+            FROM usuario
+            WHERE LOWER(email) = ?
+            """,
+            (email,)
+        )
 
-		cur.execute("UPDATE usuario SET ativo = true, codigo = NULL WHERE id_usuario = ?", (usuario[0],))
-		con.commit()
+        usuario = cur.fetchone()
 
-		return jsonify({ "message": "Email verificado com sucesso" }), 200
-	except Exception as e:
-		print(f"houve um erro ao verificar o codigo: {str(e)}")
-		con.rollback()
-		return jsonify({ "error": "Internal server error" }), 500
-	finally:
-		if cur is not None:
-			cur.close()
+        print("USUARIO ENCONTRADO:", usuario)
+
+        if not usuario:
+            return jsonify({
+                "error": "Usuario nao encontrado"
+            }), 404
+
+        codigo_banco = usuario[1]
+
+        print("CODIGO NO BANCO:", codigo_banco)
+
+        if codigo_banco is None:
+            return jsonify({
+                "error": "Nenhum codigo de verificacao encontrado"
+            }), 401
+
+        codigo_banco = str(codigo_banco).strip()
+
+        if codigo_banco != codigo:
+            return jsonify({
+                "error": "Codigo invalido"
+            }), 401
+
+        cur.execute(
+		"""
+		UPDATE usuario
+		SET ativo = true,
+			codigo = NULL
+		WHERE id_usuario = ?
+		""",
+		(usuario[0],))
+
+        con.commit()
+
+        return jsonify({
+            "message": "Email verificado com sucesso"
+        }), 200
+    except Exception as e:
+        print(f"houve um erro ao verificar o codigo: {str(e)}")
+        con.rollback()
+
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
+    finally:
+        if cur is not None:
+            cur.close()
 
 @auth_bp.route('/esqueci_senha', methods=['POST'])
 def esqueci_senha():
