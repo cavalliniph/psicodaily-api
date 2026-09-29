@@ -1,6 +1,8 @@
 import os
 from database.db import get_connection
-from funcao import criar_usuario_base, enviar_email_ativacao
+from funcao import (criar_usuario_base, enviar_email_ativacao, obter_campo,
+                    validar_cpf, validar_email, validar_nome, validar_telefone,
+                    somente_digitos, validar_imagem_usuario, salvar_imagem_usuario)
 from flask import Blueprint, current_app, jsonify, make_response, request, send_file
 from util.usuarios import usuario_autenticado
 
@@ -15,19 +17,97 @@ def usuario_atual(dados_usuario):
     try:
         con = get_connection()
         cur = con.cursor()
-        cur.execute("SELECT ID_USUARIO, NOME, EMAIL, USUARIO_ROLE FROM USUARIO WHERE ID_USUARIO = ? AND ATIVO = TRUE", (dados_usuario.get("id_usuario"),))
+        cur.execute("SELECT ID_USUARIO, NOME, EMAIL, USUARIO_ROLE, TELEFONE, CPF FROM USUARIO WHERE ID_USUARIO = ? AND ATIVO = TRUE", (dados_usuario.get("id_usuario"),))
         usuario = cur.fetchone()
         if usuario is None:
             return jsonify({"error": "Usuario indisponivel"}), 401
         resposta = jsonify({"usuario": {
             "id_usuario": usuario[0], "nome": usuario[1],
             "email": usuario[2], "tipo_usuario": usuario[3],
+            "telefone": usuario[4], "cpf": usuario[5],
         }})
         resposta.headers["Cache-Control"] = "private, no-store"
         return resposta
     except Exception:
         current_app.logger.exception("Erro ao carregar usuario autenticado")
         return jsonify({"error": "Nao foi possivel carregar o perfil"}), 500
+    finally:
+        if cur is not None:
+            cur.close()
+        if con is not None:
+            con.close()
+
+
+@usuarios_bp.route("/me", methods=["PUT", "PATCH"])
+@usuario_autenticado
+def atualizar_usuario(dados_usuario):
+    con = cur = None
+    try:
+        con = get_connection()
+        cur = con.cursor()
+        usuario_id = dados_usuario.get("id_usuario")
+        cur.execute("SELECT ATIVO, EMAIL, CPF FROM USUARIO WHERE ID_USUARIO = ?", (usuario_id,))
+        usuario = cur.fetchone()
+        if not usuario or not usuario[0]:
+            return jsonify({"error": "Usuario indisponivel"}), 401
+        email_atual = (usuario[1] or "").strip().lower()
+        cpf_atual = somente_digitos(usuario[2] or "")
+
+        formulario = request.form if request.form else (request.get_json(silent=True) or {})
+        imagem = request.files.get("imagem")
+        permitidos = {"nome", "email", "telefone", "cpf"}
+        if not hasattr(formulario, "keys"):
+            return jsonify({"error": "Formato de atualizacao invalido"}), 400
+        if not set(formulario).issubset(permitidos):
+            return jsonify({"error": "Campo de perfil invalido"}), 400
+        atualizacoes = {}
+        for campo in formulario:
+            valor = obter_campo(formulario, campo)
+            if campo == "email":
+                valor = valor.lower()
+                valido = validar_email(valor)
+            elif campo == "nome":
+                valido = validar_nome(valor)
+            elif campo == "telefone":
+                valido = validar_telefone(valor)
+            else:
+                valor = somente_digitos(valor)
+                valido = validar_cpf(valor)
+            if not valido:
+                return jsonify({"error": f"{campo.capitalize()} invalido"}), 400
+            atualizacoes[campo] = valor
+        if request.method == "PUT" and set(atualizacoes) != permitidos:
+            return jsonify({"error": "PUT exige nome, email, telefone e CPF"}), 400
+        if not atualizacoes and not (imagem and imagem.filename):
+            return jsonify({"error": "Informe um campo para atualizar"}), 400
+        if not validar_imagem_usuario(imagem):
+            return jsonify({"error": "Imagem deve ser um arquivo JPG ou JPEG"}), 400
+
+        if "email" in atualizacoes and atualizacoes["email"] != email_atual:
+            cur.execute("SELECT FIRST 1 1 FROM USUARIO WHERE LOWER(EMAIL) = ? AND ID_USUARIO <> ?", (atualizacoes["email"], usuario_id))
+            if cur.fetchone():
+                return jsonify({"error": "Email ja cadastrado"}), 409
+        if "cpf" in atualizacoes and atualizacoes["cpf"] != cpf_atual:
+            cur.execute("SELECT FIRST 1 1 FROM USUARIO WHERE CPF = ? AND ID_USUARIO <> ?", (atualizacoes["cpf"], usuario_id))
+            if cur.fetchone():
+                return jsonify({"error": "CPF ja cadastrado"}), 409
+
+        colunas = {"nome": "NOME", "email": "EMAIL", "telefone": "TELEFONE", "cpf": "CPF"}
+        if atualizacoes:
+            definicoes = ", ".join(f"{colunas[campo]} = ?" for campo in atualizacoes)
+            cur.execute(f"UPDATE USUARIO SET {definicoes} WHERE ID_USUARIO = ?",
+                        (*atualizacoes.values(), usuario_id))
+        if imagem and imagem.filename:
+            salvar_imagem_usuario(imagem, usuario_id)
+        con.commit()
+        resposta = jsonify({"message": "Perfil atualizado"})
+        resposta.headers["Cache-Control"] = "private, no-store"
+        return resposta
+    except Exception:
+        if con is not None:
+            con.rollback()
+        current_app.logger.exception("Erro ao atualizar perfil")
+        return jsonify({"error": "Nao foi possivel atualizar o perfil"}), 500
     finally:
         if cur is not None:
             cur.close()
@@ -143,7 +223,7 @@ def cadastro():
     cur = con.cursor()
 
     try:
-        usuario, erro = criar_usuario_base(cur, request.form, 'PACIENTE')
+        usuario, erro = criar_usuario_base(cur, request.form, 'PACIENTE', exigir_confirmacao_senha=True)
 
         if erro:
             return erro
@@ -152,7 +232,7 @@ def cadastro():
             raise RuntimeError("Cadastro nao retornou os dados do usuario")
 
         con.commit()
-        enviar_email_ativacao(usuario["email"], usuario["codigo"])
+        enviar_email_ativacao(usuario["email"], usuario["codigo"], usuario["nome"])
 
         return jsonify({
             "message": "Usuario cadastrado com sucesso",

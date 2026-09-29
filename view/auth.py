@@ -1,7 +1,7 @@
-from funcao import enviar_email, gerar_token, criar_hash_senha, senha_correta, validar_senha
+from funcao import enviar_email_codigo_async, gerar_token, criar_hash_senha, senha_correta, validar_senha
 from flask import Blueprint, jsonify, make_response, request
 from database.db import get_connection
-import threading
+from util.usuarios import usuario_autenticado
 import secrets
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
@@ -20,7 +20,7 @@ def login():
 		if not email or not senha:
 			return jsonify({ "error": "Email e senha sao obrigatorios" }), 400
 
-		cur.execute("SELECT id_usuario, senha, ativo, usuario_role, nome, email FROM usuario WHERE email = ?", (email,))
+		cur.execute("SELECT id_usuario, senha, ativo, usuario_role, nome, email FROM usuario WHERE LOWER(email) = LOWER(?)", (email.strip(),))
 		usuario = cur.fetchone()
 
 		if not usuario:
@@ -119,7 +119,8 @@ def esqueci_senha():
 		if not email:
 			return jsonify({ "error": "Email e obrigatorio" }), 400
 
-		cur.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
+		email = email.strip().lower()
+		cur.execute("SELECT id_usuario, email, nome FROM usuario WHERE LOWER(email) = ?", (email,))
 		usuario = cur.fetchone()
 
 		if not usuario:
@@ -129,10 +130,7 @@ def esqueci_senha():
 		cur.execute("UPDATE usuario SET codigo = ? WHERE id_usuario = ?", (codigo, usuario[0]))
 		con.commit()
 
-		threading.Thread(
-			target=enviar_email,
-			args=(email, "Recuperacao de senha", f"Seu codigo para alterar a senha e: {codigo}")
-		).start()
+		enviar_email_codigo_async(usuario[1], usuario[2], codigo, "recuperacao")
 
 		return jsonify({ "message": "Codigo enviado para o e-mail" }), 200
 	except Exception as e:
@@ -152,14 +150,15 @@ def alterar_senha():
 		data = request.get_json(silent=True) or {}
 		codigo = data.get('codigo')
 		nova_senha = data.get('senha')
+		email = (data.get('email') or '').strip().lower()
 
-		if not codigo or not nova_senha:
-			return jsonify({ "error": "Codigo e senha sao obrigatorios" }), 400
+		if not codigo or not nova_senha or not email:
+			return jsonify({ "error": "Email, codigo e senha sao obrigatorios" }), 400
 
 		if not validar_senha(nova_senha):
 			return jsonify({ "error": "Senha nao atende aos requisitos" }), 400
 
-		cur.execute("SELECT id_usuario FROM usuario WHERE codigo = ?", (codigo,))
+		cur.execute("SELECT id_usuario FROM usuario WHERE LOWER(email) = ? AND codigo = ?", (email, codigo))
 		usuario = cur.fetchone()
 
 		if not usuario:
@@ -179,6 +178,42 @@ def alterar_senha():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
+
+@auth_bp.route('/alterar_senha_logado', methods=['POST'])
+@usuario_autenticado
+def alterar_senha_logado(dados_usuario):
+	con = None
+	cur = None
+	try:
+		data = request.get_json(silent=True) or {}
+		senha_atual = data.get('senha_atual')
+		nova_senha = data.get('nova_senha')
+		if not senha_atual or not nova_senha:
+			return jsonify({"error": "Informe a senha atual e a nova senha"}), 400
+		if not validar_senha(nova_senha):
+			return jsonify({"error": "A nova senha deve ter 8 a 12 caracteres e incluir maiuscula, minuscula, numero e simbolo"}), 400
+		con = get_connection()
+		cur = con.cursor()
+		cur.execute("SELECT SENHA FROM USUARIO WHERE ID_USUARIO = ? AND ATIVO = TRUE", (dados_usuario.get('id_usuario'),))
+		usuario = cur.fetchone()
+		if not usuario:
+			return jsonify({"error": "Usuario indisponivel"}), 401
+		if not senha_correta(usuario[0], senha_atual):
+			return jsonify({"error": "Senha atual incorreta"}), 401
+		cur.execute("UPDATE USUARIO SET SENHA = ? WHERE ID_USUARIO = ?", (criar_hash_senha(nova_senha), dados_usuario.get('id_usuario')))
+		con.commit()
+		return jsonify({"message": "Senha alterada com sucesso"})
+	except Exception:
+		if con is not None:
+			con.rollback()
+		return jsonify({"error": "Nao foi possivel alterar a senha"}), 500
+	finally:
+		if cur is not None:
+			cur.close()
+		if con is not None:
+			con.close()
 
 @auth_bp.route('/logout', methods=['POST'])
 def logout():

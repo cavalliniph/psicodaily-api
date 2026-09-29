@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSICOdaily</title>
+</head>
+<body style="margin:0;padding:0;background:#eef6fb;font-family:Arial,Helvetica,sans-serif;color:#24415c;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef6fb;padding:32px 12px;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:18px;overflow:hidden;">
+                    <tr>
+                        <td align="center" style="padding:28px 20px;background:#dff1fb;border-bottom:1px solid #d1e7f3;">
+                            <div style="font-size:27px;line-height:1.2;font-weight:700;letter-spacing:.4px;color:#176fa8;">PSICOdaily</div>
+                            <div style="margin-top:6px;font-size:13px;color:#54748d;">Cuidado emocional no seu dia a dia</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:36px 32px 30px;">
+                            <h1 style="margin:0 0 16px;text-align:center;font-size:24px;line-height:1.3;color:#163f70;">
+                                {% if nome %}Olá, {{ nome }}!{% else %}Olá!{% endif %}
+                            </h1>
+                            <p style="margin:0 0 24px;text-align:center;font-size:16px;line-height:1.6;color:#4d6578;">
+                                {{ mensagem }}
+                            </p>
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td align="center" style="padding:20px 12px;background:#f0f9fd;border:1px solid #b8deef;border-radius:14px;">
+                                        <div style="margin-bottom:8px;font-size:12px;font-weight:700;letter-spacing:1.3px;text-transform:uppercase;color:#54748d;">Seu código de verificação</div>
+                                        <div style="font-size:34px;line-height:1.3;font-weight:700;letter-spacing:8px;color:#176fa8;">{{ codigo }}</div>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p style="margin:22px 0 0;text-align:center;font-size:14px;line-height:1.6;color:#5e7180;">
+                                {{ mensagem_secundaria }}
+                            </p>
+                            <p style="margin:22px 0 0;padding:13px 15px;background:#f7fafc;border-left:4px solid #73b6d9;border-radius:6px;font-size:13px;line-height:1.5;color:#617583;">
+                                Por segurança, não compartilhe este código. Se você não reconhece esta solicitação, ignore este e-mail.
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td align="center" style="padding:22px 20px;background:#f5fafe;">
+                            <div style="font-size:14px;font-weight:700;color:#176fa8;">PSICOdaily</div>
+                            <div style="margin-top:6px;font-size:12px;line-height:1.5;color:#718794;">Cuidar da sua mente faz parte da sua rotina.</div>
+                            <div style="margin-top:12px;font-size:11px;color:#8a9aa5;">© 2026 PSICOdaily</div>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

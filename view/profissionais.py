@@ -297,7 +297,7 @@ def cadastro_profissional():
 				 (usuario["id_usuario"], conselho_tipo, conselho_numero, especialidade, preco_hora, descricao))
 
 		con.commit()
-		enviar_email_ativacao(usuario["email"], usuario["codigo"])
+		enviar_email_ativacao(usuario["email"], usuario["codigo"], usuario["nome"])
 
 		return jsonify({
 			"message": "Profissional cadastrado com sucesso",

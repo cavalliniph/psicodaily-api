@@ -3,6 +3,7 @@ from extensions.websocket import sock
 from services.signaling_service import signaling_service
 from funcao import decodificar_token
 from database.db import get_connection
+from datetime import datetime, timedelta
 
 signaling_bp = Blueprint('signaling', __name__)
 
@@ -17,12 +18,17 @@ def signaling(ws):
         return
 
     con = None
+    cursor = None
 
     try:
         payload = decodificar_token(token)
 
         id_usuario = payload.get("id_usuario")
-        sessao_id = request.args.get("sessao_id")
+        try:
+            sessao_id = int(request.args.get("sessao_id", ""))
+        except (TypeError, ValueError):
+            ws.close()
+            return
 
         if not sessao_id:   # nao tem como saber qual a
             ws.close()      # sessao se nao informar
@@ -39,7 +45,7 @@ def signaling(ws):
         # pra validar se tem permissao de entrar
         # na chamada
         cursor.execute("""
-        SELECT paciente_id, profissional_id 
+        SELECT paciente_id, profissional_id, status, data_hora_inicio, data_hora_fim
         FROM SESSAO s
         WHERE sessao_id = ?
         """, (sessao_id,))
@@ -50,11 +56,14 @@ def signaling(ws):
             ws.close()
             return
 
-        participantes = list(resultado_sessao)
+        participantes = list(resultado_sessao[:2])
         # ^^ estamos aqui transformando numa lista
         # pra facilitar a validacao logo abaixo
 
-        pode_entrar: bool = id_usuario in participantes
+        pode_entrar: bool = (id_usuario in participantes
+                            and resultado_sessao[2] != "CANCELADO"
+                            and resultado_sessao[3] <= datetime.now().replace(second=0, microsecond=0) + timedelta(minutes=15)
+                            and resultado_sessao[4] >= datetime.now())
 
         if not pode_entrar:
             ws.close()
@@ -68,5 +77,7 @@ def signaling(ws):
 
     finally:
         print("WS DESCONECTADO")
+        if cursor is not None:
+            cursor.close()
         if con is not None:
             con.close()

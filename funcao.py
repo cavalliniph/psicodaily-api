@@ -4,10 +4,12 @@ import os
 import secrets
 import threading
 import unicodedata
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib
 from flask import current_app, jsonify, request
 from flask_bcrypt import check_password_hash, generate_password_hash
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 import jwt
 import re
 
@@ -51,20 +53,23 @@ def validar_senha(senha: str):
         return False
     return True
 
-def enviar_email(destinatario, assunto, mensagem):
+def enviar_email(destinatario, assunto, mensagem, html=None):
         user = "psicodaily.contato@gmail.com"
         senha = "hmdk zazs yrxn gylf"
 
-        msg = MIMEText(mensagem)
+        if html:
+            msg = MIMEMultipart("alternative")
+            msg.attach(MIMEText(mensagem, "plain", "utf-8"))
+            msg.attach(MIMEText(html, "html", "utf-8"))
+        else:
+            msg = MIMEText(mensagem, "plain", "utf-8")
         msg['Subject'] = assunto
         msg['From'] = user
         msg['To'] = destinatario
 
-        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-
-        server.login(user, senha)
-        server.send_message(msg)
-        server.quit()
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(user, senha)
+            server.send_message(msg)
 
 def validar_cpf(cpf):
 	cpf = ''.join(filter(str.isdigit, cpf))
@@ -174,17 +179,54 @@ def salvar_imagem_usuario(imagem, id_usuario):
 	imagem.save(caminho_imagem)
 
 
-def enviar_email_ativacao(email, codigo):
+def enviar_email_codigo(email, nome, codigo, finalidade):
+	conteudos = {
+		"ativacao": {
+			"assunto": "Ative sua conta no PSICOdaily",
+			"mensagem": "Use o código abaixo para confirmar seu e-mail e ativar sua conta.",
+			"mensagem_secundaria": "Digite este código na tela de ativação. Ele pode ser usado uma única vez.",
+		},
+		"recuperacao": {
+			"assunto": "Código para redefinir sua senha",
+			"mensagem": "Recebemos uma solicitação para redefinir a senha da sua conta.",
+			"mensagem_secundaria": "Se você não solicitou a redefinição, ignore este e-mail. Sua senha atual continuará válida.",
+		},
+	}
+	conteudo = conteudos.get(finalidade)
+	if conteudo is None:
+		raise ValueError("Finalidade de e-mail inválida")
+
+	diretorio_templates = os.path.join(os.path.dirname(__file__), "templates")
+	ambiente = Environment(
+		loader=FileSystemLoader(diretorio_templates),
+		autoescape=select_autoescape(["html"]),
+	)
+	html = ambiente.get_template("email_codigo.html").render(
+		nome=nome or "",
+		codigo=codigo,
+		mensagem=conteudo["mensagem"],
+		mensagem_secundaria=conteudo["mensagem_secundaria"],
+	)
+
+	texto = f"{conteudo['mensagem']}\n\nCódigo: {codigo}\n\n{conteudo['mensagem_secundaria']}"
+	enviar_email(email, conteudo["assunto"], texto, html)
+
+
+def enviar_email_codigo_async(email, nome, codigo, finalidade):
 	threading.Thread(
-		target=enviar_email,
-		args=(email, "Codigo de verificacao", f"Seu codigo de verificacao e: {codigo}"),
-		daemon=True
+		target=enviar_email_codigo,
+		args=(email, nome, codigo, finalidade),
+		daemon=True,
 	).start()
+
+
+def enviar_email_ativacao(email, codigo, nome=""):
+	enviar_email_codigo_async(email, nome, codigo, "ativacao")
 
 
 def criar_usuario_base(cur, formulario, usuario_role, exigir_confirmacao_senha=False):
 	imagem = request.files.get('imagem')
-	email = obter_campo(formulario, 'email')
+	email = obter_campo(formulario, 'email').lower()
 	nome = obter_campo(formulario, 'nome')
 	telefone = obter_campo(formulario, 'telefone')
 	senha = obter_campo(formulario, 'senha')
