@@ -69,6 +69,61 @@ def login():
 		if cur is not None:
 			cur.close()
 
+@auth_bp.route('/login_mobile', methods=['POST'])
+def login_mobile():
+	con = get_connection()
+	cur = con.cursor()
+
+	try:
+		data = request.get_json(silent=True) or {}
+
+		email = data.get('email')
+		senha = data.get('senha')
+
+		if not email or not senha:
+			return jsonify({ "error": "Email e senha sao obrigatorios" }), 400
+
+		cur.execute("SELECT id_usuario, senha, ativo, usuario_role, nome, email FROM usuario WHERE LOWER(email) = LOWER(?)", (email.strip(),))
+		usuario = cur.fetchone()
+
+		if not usuario:
+			return jsonify({ "error": "Usuario nao encontrado" }), 404
+
+		if not senha_correta(usuario[1], senha):
+			return jsonify({ "error": "Senha incorreta" }), 401
+
+		if not usuario[2]:
+			return jsonify({ "error": "Usuario inativo" }), 403
+
+		payload = {
+			'id_usuario': usuario[0],
+			'usuario_role': usuario[3]
+		}
+
+		token = gerar_token(payload)
+
+		if not token:
+			raise RuntimeError("Erro ao gerar token")
+
+		response = make_response({
+			"message": "Usuario logado com sucesso",
+			"usuario": {
+				"id_usuario": usuario[0],
+				"tipo_usuario": usuario[3],
+				"token": token,
+				"nome": usuario[4],
+				"email": usuario[5]
+			}
+		})
+
+		return response
+	except Exception as e:
+		print(str(e))
+		return jsonify({ "error": "Internal server error" }), 500
+	finally:
+		if cur is not None:
+			cur.close()
+
 @auth_bp.route('/verificar_codigo', methods=['POST'])
 def verificar_codigo():
     con = get_connection()
