@@ -5,8 +5,9 @@ class SignalingService:
     def __init__(self):
         self.rooms = defaultdict(set)
 
-    def handle_connection(self, ws):
-        current_room = None
+    def handle_connection(self, ws, room):
+        current_room = room
+        self.join(ws, room)
 
         try:
             while True:
@@ -18,11 +19,7 @@ class SignalingService:
                 message = json.loads(raw_message)
                 message_type = message.get("type")
 
-                if message_type == "join":
-                    current_room = message["room"]
-                    self.join(ws, current_room)
-
-                elif message_type in {
+                if message_type in {
                     "offer",
                     "answer",
                     "ice-candidate",
@@ -32,10 +29,8 @@ class SignalingService:
                         current_room,
                         message
                     )
-
         finally:
-            if current_room:
-                self.leave(ws, current_room)
+            self.leave(ws, current_room)
     def join(self, ws, room):
         self.rooms[room].add(ws)
 
