@@ -7,6 +7,7 @@ encam_bp = Blueprint('encaminhamentos', __name__, url_prefix='/api/encaminhament
 @encam_bp.route('/', methods=['POST'])
 @profissional_autenticado
 def criar_encaminhamento(payload):
+    con = None
     cursor = None
     try:
         con = get_connection()
@@ -52,10 +53,13 @@ def criar_encaminhamento(payload):
     finally:
         if cursor is not None:
             cursor.close()
+        if con is not None:
+            con.close()
 
 @encam_bp.route('/', methods=['GET'])
 @profissional_autenticado
 def encaminhamentos(payload):
+    con = None
     cursor = None
     try:
         con = get_connection()
@@ -77,3 +81,5 @@ def encaminhamentos(payload):
     finally:
         if cursor is not None:
             cursor.close()
+        if con is not None:
+            con.close()
