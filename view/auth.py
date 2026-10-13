@@ -1,6 +1,7 @@
 from funcao import enviar_email_codigo_async, gerar_token, criar_hash_senha, senha_correta, validar_senha
 from flask import Blueprint, jsonify, make_response, request
 from database.db import get_connection
+from services.upload_service import upload_service
 from util.usuarios import usuario_autenticado
 import secrets
 
@@ -48,7 +49,8 @@ def login():
 				"id_usuario": usuario[0],
 				"tipo_usuario": usuario[3],
 				"nome": usuario[4],
-				"email": usuario[5]
+				"email": usuario[5],
+				"foto_url": upload_service.url_foto_usuario(usuario[0])
 			}
 		})
 
@@ -68,6 +70,8 @@ def login():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 @auth_bp.route('/login_mobile', methods=['POST'])
 def login_mobile():
@@ -123,6 +127,8 @@ def login_mobile():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 @auth_bp.route('/verificar_codigo', methods=['POST'])
 def verificar_codigo():
@@ -209,6 +215,8 @@ def verificar_codigo():
     finally:
         if cur is not None:
             cur.close()
+        if con is not None:
+            con.close()
 
 @auth_bp.route('/esqueci_senha', methods=['POST'])
 def esqueci_senha():
@@ -243,6 +251,8 @@ def esqueci_senha():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 @auth_bp.route('/alterar_senha', methods=['POST'])
 def alterar_senha():

@@ -12,6 +12,7 @@ from flask_bcrypt import check_password_hash, generate_password_hash
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import jwt
 import re
+from services.upload_service import upload_service
 
 def gerar_token(payload):
 	try:
@@ -172,11 +173,7 @@ def salvar_imagem_usuario(imagem, id_usuario):
 	if not imagem or not imagem.filename:
 		return
 
-	nome_imagem = f"{id_usuario}.jpg"
-	caminho_imagem_destino = os.path.join(current_app.config['UPLOAD_FOLDER'], "usuarios")
-	os.makedirs(caminho_imagem_destino, exist_ok=True)
-	caminho_imagem = os.path.join(caminho_imagem_destino, nome_imagem)
-	imagem.save(caminho_imagem)
+	upload_service.upload_file(imagem.stream, id_usuario)
 
 
 def enviar_email_codigo(email, nome, codigo, finalidade):

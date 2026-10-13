@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from database.db import get_connection
+from services.upload_service import upload_service
 from util.usuarios import profissional_autenticado
 from funcao import (
 	ESPECIALIDADES_PROFISSIONAIS,
@@ -20,6 +21,7 @@ LIMITE_PAGINACAO = 2147483647
 
 @prof_bp.route('/', methods=['GET'])
 def profissionais():
+	con = None
 	cur = None
 
 	try:
@@ -148,6 +150,8 @@ def profissionais():
 
 		columns = [desc[0].lower() for desc in cur.description]
 		payload = [dict(zip(columns, row)) for row in resultados]
+		for profissional in payload:
+			profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
 
 		cur.execute("SELECT COUNT(*) " + filtros, tuple(params))
 		total_res = cur.fetchone()
@@ -173,6 +177,8 @@ def profissionais():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 @prof_bp.route('/<int:id>', methods=['GET'])
 def profissional(id):
@@ -198,6 +204,7 @@ def profissional(id):
 
 		columns = [desc[0].lower() for desc in cur.description]
 		payload = dict(zip(columns, resultado))
+		payload['foto_url'] = upload_service.url_foto_usuario(id)
 
 		return jsonify({ 'message': 'Profissionais obtidos com sucesso', 'profissionais': payload }), 200
 	except Exception as e:
@@ -206,6 +213,8 @@ def profissional(id):
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 
 @prof_bp.route('/', methods=['POST'])
@@ -321,6 +330,8 @@ def cadastro_profissional():
 	finally:
 		if cur is not None:
 			cur.close()
+		if con is not None:
+			con.close()
 
 
 @prof_bp.route('/me', methods=['PATCH'])
@@ -356,3 +367,5 @@ def atualizar_profissional(dados_usuario):
 		return jsonify({ 'error': 'Internal Server Error' }), 500
 	finally:
 		cur.close()
+		if con is not None:
+			con.close()

@@ -69,6 +69,11 @@ def signaling(ws):
             ws.close()
             return
 
+        # A chamada pode durar uma hora; nao segura conexao/transacao do banco esse tempo todo.
+        cursor.close()
+        con.close()
+        cursor = con = None
+
         signaling_service.handle_connection(ws, f"sessao:{sessao_id}")
 
     except Exception as e:

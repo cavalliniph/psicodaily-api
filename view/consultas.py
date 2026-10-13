@@ -3,6 +3,7 @@ from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request
 from database.db import get_connection
+from services.upload_service import upload_service
 from funcao import decodificar_token
 from jwt import ExpiredSignatureError, InvalidTokenError
 from util.usuarios import profissional_autenticado
@@ -12,8 +13,11 @@ cons_bp = Blueprint('consultas', __name__, url_prefix='/api/consultas')
 
 def serializar_sessao(colunas, linha):
     # TIMESTAMP do banco representa o horario local, sem conversao para GMT.
-    return {coluna: valor.isoformat() if isinstance(valor, (date, datetime)) else valor
-            for coluna, valor in zip(colunas, linha)}
+    sessao = {coluna: valor.isoformat() if isinstance(valor, (date, datetime)) else valor
+              for coluna, valor in zip(colunas, linha)}
+    sessao['paciente_foto_url'] = upload_service.url_foto_usuario(sessao['paciente_id'])
+    sessao['profissional_foto_url'] = upload_service.url_foto_usuario(sessao['profissional_id'])
+    return sessao
 
 
 def ler_intervalo(inicio, fim):

@@ -17,8 +17,12 @@ printf "ALTER USER SYSDBA SET PASSWORD 'sysdba';\nCOMMIT;\n" | \
 
 echo "Starting Gunicorn..."
 
+# gthread e nao gevent: o fdb chama o libfbclient via ctypes, que o gevent nao torna
+# cooperativo, entao cada query travava o worker inteiro. 1 worker porque as salas do
+# signaling ficam em memoria; cada chamada de video ocupa uma thread enquanto dura.
 exec gunicorn \
-    --worker-class gevent \
+    --worker-class gthread \
+    --threads 32 \
     --bind 0.0.0.0:8000 \
     --access-logfile - \
     --error-logfile - \

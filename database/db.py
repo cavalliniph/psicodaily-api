@@ -1,20 +1,67 @@
 import os
+import queue
 from dotenv import load_dotenv
 import fdb
-from flask import current_app
 
 load_dotenv()
 
-def get_connection():
+# Abrir conexao no Firebird custa ~50ms e, com varias ao mesmo tempo (uma tela dispara
+# consultas + financeiro + um avatar por paciente), algumas esperavam 1s pelo SYN.
+# As rotas continuam chamando con.close(); a conexao so volta para ca.
+_livres = queue.LifoQueue(maxsize=10)
+
+
+class ConexaoDoPool:
+    def __init__(self, con):
+        self._con = con
+
+    def __getattr__(self, nome):
+        return getattr(self._con, nome)
+
+    def close(self):
+        con, self._con = self._con, None
+        if con is None:
+            return
+        try:
+            # Descarta o que a rota nao commitou e fecha os cursores abertos
+            con.rollback()
+            _livres.put_nowait(con)
+        except Exception:
+            _fechar(con)
+
+
+def _fechar(con):
     try:
-        con = fdb.connect(
+        con.close()
+    except Exception:
+        pass
+
+
+def _conectar():
+    try:
+        return fdb.connect(
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             host=os.getenv("DB_HOST"),
             database=os.getenv("DB_DATABASE"),
             charset=os.getenv("DB_CHARSET", "UTF8"),
         )
-        return con
     except Exception as e:
         print(f"erro ao conectar ao banco: {str(e)}")
         raise RuntimeError("Erro ao conectar ao banco")
+
+
+def get_connection():
+    while True:
+        try:
+            con = _livres.get_nowait()
+        except queue.Empty:
+            return ConexaoDoPool(_conectar())
+        try:
+            # Se o Firebird reiniciou, a conexao guardada morreu: descarta e tenta a proxima
+            cur = con.cursor()
+            cur.execute("SELECT 1 FROM RDB$DATABASE")
+            cur.close()
+            return ConexaoDoPool(con)
+        except Exception:
+            _fechar(con)

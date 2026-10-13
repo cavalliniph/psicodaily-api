@@ -4,6 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 from database.db import get_connection
 from util.usuarios import profissional_autenticado
 from view.registros import COLUNAS, serializar
+from services.upload_service import upload_service
 
 prontuario_bp = Blueprint('prontuario', __name__, url_prefix='/api/prontuario')
 
@@ -66,7 +67,8 @@ def prontuario(dados_usuario, paciente_id):
         pagina = cur.fetchall()
         registros = [serializar(linha) for linha in pagina[:20]]
         resposta = jsonify({
-            'paciente': {'id_usuario': paciente_id, 'nome': paciente[0]},
+            'paciente': {'id_usuario': paciente_id, 'nome': paciente[0],
+                         'foto_url': upload_service.url_foto_usuario(paciente_id)},
             'ultimaConsulta': {'data': ultima[0].isoformat(), 'status': ultima[1]} if ultima else None,
             'resumo': {
                 'totalRegistros': len(linhas),
