@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from database.db import get_connection
+from util.usuarios import profissional_autenticado
 from funcao import (
 	ESPECIALIDADES_PROFISSIONAIS,
 	criar_usuario_base,
@@ -320,3 +321,38 @@ def cadastro_profissional():
 	finally:
 		if cur is not None:
 			cur.close()
+
+
+@prof_bp.route('/me', methods=['PATCH'])
+@profissional_autenticado
+def atualizar_profissional(dados_usuario):
+	formulario = request.get_json(silent=True) or {}
+	if not isinstance(formulario, dict) or not formulario or not set(formulario).issubset({'descricao', 'preco_hora'}):
+		return resposta_erro("Informe descricao e/ou preco_hora")
+
+	atualizacoes = {}
+	if 'descricao' in formulario:
+		descricao = obter_campo(formulario, 'descricao')
+		if len(descricao) < 10 or len(descricao) > 1000:
+			return resposta_erro("Descricao deve ter entre 10 e 1000 caracteres")
+		atualizacoes['DESCRICAO'] = descricao
+	if 'preco_hora' in formulario:
+		preco_hora = normalizar_valor_sessao(obter_campo(formulario, 'preco_hora'))
+		if preco_hora is None:
+			return resposta_erro("Valor em reais deve ser positivo, ate 100000, com no maximo duas casas decimais")
+		atualizacoes['PRECO_HORA'] = preco_hora
+
+	con = get_connection()
+	cur = con.cursor()
+	try:
+		definicoes = ", ".join(f"{coluna} = ?" for coluna in atualizacoes)
+		cur.execute(f"UPDATE PROFISSIONAL SET {definicoes} WHERE USUARIO_ID = ?",
+					(*atualizacoes.values(), dados_usuario.get('id_usuario')))
+		con.commit()
+		return jsonify({ 'message': 'Perfil profissional atualizado' }), 200
+	except Exception as e:
+		print(f"[{__name__}]: {str(e)}")
+		con.rollback()
+		return jsonify({ 'error': 'Internal Server Error' }), 500
+	finally:
+		cur.close()
