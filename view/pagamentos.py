@@ -1,7 +1,10 @@
 import json
+import math
 import os
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import Blueprint, jsonify, request
@@ -47,16 +50,26 @@ def _arkhe_request(method, path, body=None):
     req = Request(f'{ARKHE_BASE_URL}{path}', data=dados, method=method, headers=headers)
     try:
         with urlopen(req, timeout=15) as resposta:
-            return resposta.status, json.loads(resposta.read().decode('utf-8'))
+            status, corpo = resposta.status, json.loads(resposta.read().decode('utf-8'))
     except HTTPError as erro:
         corpo = erro.read().decode('utf-8', errors='replace')
         try:
             detalhe = json.loads(corpo)
         except json.JSONDecodeError:
-            detalhe = {'error': corpo or 'Arkhé recusou a requisicao'}
+            detalhe = None
+        if not isinstance(detalhe, dict):
+            # Erros fora da API (404 do Flask, proxy) chegam em HTML
+            detalhe = {'error': f'Arkhé respondeu HTTP {erro.code}'}
         return erro.code, detalhe
-    except URLError:
+    except (URLError, OSError):
+        # OSError cobre o timeout de leitura, que nao vira URLError
         raise RuntimeError('Nao foi possivel conectar a Arkhé')
+    except ValueError:
+        raise RuntimeError('Arkhé retornou uma resposta invalida')
+
+    if not isinstance(corpo, dict):
+        raise RuntimeError('Arkhé retornou uma resposta invalida')
+    return status, corpo
 
 
 @pagamentos_bp.route('/cobranca', methods=['POST'])
@@ -137,3 +150,83 @@ def consultar_cobranca(id_cobranca):
         return jsonify({'cobranca': resposta}), 200
     except RuntimeError as erro_runtime:
         return jsonify({'error': str(erro_runtime)}), 503
+
+
+@pagamentos_bp.route('/financeiro', methods=['GET'])
+def financeiro():
+    payload, erro = _token_payload()
+    if erro:
+        return erro
+    if payload.get('usuario_role') not in ('PSICOLOGO', 'PSIQUIATRA'):
+        return jsonify({'error': 'Somente profissionais podem ver o financeiro'}), 403
+
+    dias = request.args.get('dias', '30')
+    if dias not in ('7', '30', '90'):
+        return jsonify({'error': 'dias deve ser 7, 30 ou 90'}), 400
+
+    hoje = date.today()
+    periodo = urlencode({
+        'data_inicio': (hoje - timedelta(days=int(dias) - 1)).isoformat(),
+        'data_fim': hoje.isoformat(),
+    })
+
+    try:
+        # ponytail: credencial global do .env, todos os profissionais veem a mesma conta PJ
+        respostas = {}
+        for chave, caminho in (
+            ('saldo', '/api/v1/saldo'),
+            ('resumo', '/api/v1/resumo-financeiro'),
+            ('movimentacoes', f'/api/v1/movimentacoes?{periodo}'),
+        ):
+            status, resposta = _arkhe_request('GET', caminho)
+            if status >= 400:
+                return jsonify({'error': 'Arkhé nao retornou o financeiro', 'detalhes': resposta}), 502
+            respostas[chave] = resposta
+    except RuntimeError as erro_runtime:
+        return jsonify({'error': str(erro_runtime)}), 503
+
+    saldo = _numero(respostas['saldo'].get('saldo'))
+    resumo = {campo: _numero(respostas['resumo'].get(campo))
+              for campo in ('total_receitas', 'total_despesas', 'saldo_periodo')}
+    movimentacoes = respostas['movimentacoes'].get('movimentacoes')
+    if saldo is None or None in resumo.values() or not isinstance(movimentacoes, list):
+        return jsonify({'error': 'Arkhé retornou dados financeiros invalidos'}), 502
+
+    return jsonify({
+        'saldo': saldo,
+        'resumo': resumo,
+        # Um registro malformado nao derruba o dashboard: so fica de fora
+        'movimentacoes': [m for m in map(_movimentacao, movimentacoes) if m],
+    }), 200
+
+
+def _numero(valor):
+    if isinstance(valor, bool):
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return None
+    return numero if math.isfinite(numero) else None
+
+
+def _movimentacao(item):
+    if not isinstance(item, dict):
+        return None
+    valor = _numero(item.get('valor'))
+    data = item.get('data_movimentacao')
+    try:
+        # A Arkhé manda microssegundos; nem todo navegador interpreta esse formato
+        data = datetime.fromisoformat(str(data)).strftime('%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return None
+    if valor is None or item.get('tipo') not in ('entrada', 'saida'):
+        return None
+    return {
+        'id_movimentacao': item.get('id_movimentacao'),
+        'nome_contraparte': str(item.get('nome_contraparte') or 'Sem identificação'),
+        'valor': valor,
+        'data_movimentacao': data,
+        'tipo': item['tipo'],
+        'origem': str(item.get('origem') or ''),
+    }
