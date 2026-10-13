@@ -161,8 +161,9 @@ def financeiro():
         return jsonify({'error': 'Somente profissionais podem ver o financeiro'}), 403
 
     dias = request.args.get('dias', '30')
-    if dias not in ('7', '30', '90'):
-        return jsonify({'error': 'dias deve ser 7, 30 ou 90'}), 400
+    # 365 alimenta o historico mensal da carteira
+    if dias not in ('7', '30', '90', '365'):
+        return jsonify({'error': 'dias deve ser 7, 30, 90 ou 365'}), 400
 
     hoje = date.today()
     periodo = urlencode({
@@ -175,6 +176,7 @@ def financeiro():
         respostas = {}
         for chave, caminho in (
             ('saldo', '/api/v1/saldo'),
+            ('conta', '/api/v1/conta'),
             ('resumo', '/api/v1/resumo-financeiro'),
             ('movimentacoes', f'/api/v1/movimentacoes?{periodo}'),
         ):
@@ -194,10 +196,19 @@ def financeiro():
 
     return jsonify({
         'saldo': saldo,
+        'conta': _conta(respostas['conta']),
         'resumo': resumo,
         # Um registro malformado nao derruba o dashboard: so fica de fora
         'movimentacoes': [m for m in map(_movimentacao, movimentacoes) if m],
     }), 200
+
+
+def _conta(conta):
+    # So o necessario para exibir; a Arkhé manda numero_conta como inteiro
+    nome, agencia, numero = (str(conta.get(campo) or '') for campo in ('nome', 'agencia', 'numero_conta'))
+    if not numero:
+        return None
+    return {'nome': nome, 'agencia': agencia, 'final': numero[-4:]}
 
 
 def _numero(valor):
