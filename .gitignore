@@ -8,3 +8,5 @@ __pycache__/
 *.pyd
 database/*.FDB
 usuarios/*.jpg
+# instalador do Claude Code, baixado por cada dev
+.claude/install.cmd
