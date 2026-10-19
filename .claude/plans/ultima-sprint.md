@@ -176,7 +176,7 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 
 | Peça | Como |
 |---|---|
-| Volume | `psicodaily-db`, Single Read/Write, montado em `/data` no serviço da API. Não em `/app/database`, para não esconder arquivos da imagem. `DB_DATABASE=/data/BANCO.FDB`; o entrypoint faz `chown -R firebird:firebird /data` |
+| Volume | O `firebird-data` que já existe (ReadWriteOnce, montado em `/var/lib/firebird/data`). Em produção, `DB_DATABASE=/var/lib/firebird/data/BANCO.FDB`; fora dela, o padrão do entrypoint é `/data/BANCO.FDB`. O entrypoint faz `chown -R firebird:firebird` na pasta e guarda os backups em `<pasta>/backups` |
 | Imagem | Só código: `database/*.FDB` entra no `.dockerignore` e sai do git (`git rm --cached`). Sai também o `chown` do `.FDB` no `Dockerfile` |
 | Primeiro boot | Se `/data/BANCO.FDB` não existe e `CRIAR_BANCO=1`, o entrypoint cria um banco vazio em **modo embarcado, antes de subir o servidor**: o `CREATE DATABASE` remoto recusa a senha inicial da imagem. Sem a variável, o container sai com erro, para um volume esquecido não virar banco vazio em produção |
 | Migrations | `database/migrations/NNNN_descricao.sql`, aplicadas em ordem por `database/migrar.py` (~50 linhas, com o `fdb` que já está instalado). Controle na tabela `SCHEMA_MIGRATION (VERSAO, NOME, APLICADA_EM)`. Cada arquivo roda numa transação só: se falhar, nada fica pela metade |
@@ -202,13 +202,23 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 - **Restauração:** `gbak -c` a partir de `/data/backups` via `northflank exec service`, ou clonar o volume a partir de um snapshot e anexá-lo ao serviço.
 
 **Implantação (uma vez)**
-1. ~~Local: `0001`, `migrar.py`, `seed.sql`, `GET /api/saude`, entrypoint e CI.~~ Feito na branch `f0-migrations`.
-2. Northflank: criar o volume e o secret group, e agendar o snapshot.
-3. Numa janela de pouco uso, copiar o banco atual para o volume: `northflank download service file --remotePath /app/database/BANCO.FDB` do container em execução → `python database/migrar.py --baseline 1` **localmente**, com `DB_DATABASE` apontando para o arquivo baixado (a senha inicial do container não serve para o `fdb`, só para o `isql` trocá-la) → `northflank upload service file --remotePath /data/BANCO.FDB`. O que for gravado entre o download e o deploy se perde, por isso a janela.
-4. Variáveis no serviço: `DB_DATABASE=/data/BANCO.FDB`, `DB_HOST=127.0.0.1` e `DB_PASSWORD` forte (sem aspas simples), pelo secret group. Readiness probe HTTP em `/api/saude`, porta 8000. Merge da `f0-migrations` na `main` → deploy. Conferir no log "Backup antes das migrations" e "schema em dia", depois login, busca e uma consulta.
-5. `git rm --cached database/BANCO.FDB`. Isso resolve o item 0.2 daqui em diante; o histórico continua com o arquivo até rodar `git filter-repo` ou tornar o repo privado.
-6. Workflow do Actions e proteção da `main`.
-7. Atualizar `CLAUDE.md` e `architecture.md`: comandos de dev, deploy e "Pontos de atenção".
+
+Estado do Northflank conferido em 19/10/2026 (só leitura):
+- Projeto `psicodaily`, serviço combined `psicodaily-api`, build só da `main` e 1 instância.
+- Já existe o volume `firebird-data` (10 GB, ReadWriteOnce), montado em **`/var/lib/firebird/data`**, mas **vazio**: o serviço usa `DB_DATABASE=/app/database/BANCO.FDB`, a cópia da imagem, que é zerada a cada deploy.
+- Não há backup agendado nem health check.
+
+1. ~~Local: `0001`, `migrar.py`, `seed.sql`, `GET /api/saude`, entrypoint e CI.~~ Feito na branch `f0-migrations` (CI verde no GitHub).
+2. **Sem downtime:** colocar uma `DB_PASSWORD` forte no secret group (sem aspas simples; o entrypoint novo passa a usá-la) e criar o backup agendado diário do volume `firebird-data`, com 14 dias de retenção.
+3. **Janela de poucos minutos** (o que for gravado entre 3a e 4 se perde). Tudo pelo `northflank exec service`, dentro do container atual:
+   - a. `gbak -b -user SYSDBA -password <senha atual> 127.0.0.1:/app/database/BANCO.FDB /var/lib/firebird/data/inicial.fbk`, que é consistente mesmo com o banco aberto;
+   - b. `gbak -c -user SYSDBA -password <senha atual> /var/lib/firebird/data/inicial.fbk 127.0.0.1:/var/lib/firebird/data/BANCO.FDB`;
+   - c. baseline: `northflank upload service file --localPath database --remotePath /tmp/f0/database` e depois `cd /tmp/f0 && DB_DATABASE=/var/lib/firebird/data/BANCO.FDB python database/migrar.py --baseline 1`.
+4. Trocar `DB_DATABASE` para `/var/lib/firebird/data/BANCO.FDB` no serviço. Isso redeploya a **imagem atual**, que já funciona com o banco no volume, e é aqui que os dados passam a sobreviver aos deploys. Conferir login e busca; fazer um restart e conferir de novo.
+5. Merge da `f0-migrations` na `main`: o entrypoint novo faz backup, migra e sobe. No log, conferir "Backup antes das migrations" e "schema em dia". Depois disso, readiness probe HTTP em `/api/saude`, porta 8000. Antes do merge ela não funciona, porque a imagem antiga não tem a rota.
+6. `git rm --cached database/BANCO.FDB` na `main`. Daqui em diante os dados pessoais param de ir para o repo; o histórico só limpa com `git filter-repo` ou com o repo privado.
+7. Proteção da `main` no GitHub: merge só por PR com o job `CI / testes` verde.
+8. Atualizar `CLAUDE.md` e `architecture.md` com o caminho real do banco em produção.
 
 **Pronto quando:** um deploy da `main` com uma migration nova mantém os dados de produção; o CI aplica as migrations do zero e os testes passam; existem um snapshot e um `gbak` recentes. Teste final recomendado: logo depois do passo 4, fazer um deploy vazio (redeploy) e conferir que os dados continuam lá.
 Esforço: M (2 a 4 dias), quase tudo na implantação única.
