@@ -1,12 +1,19 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from database.db import transacao
 from funcao import (
+	AREAS_ATUACAO,
 	ESPECIALIDADES_PROFISSIONAIS,
+	IDIOMAS,
+	MAXIMO_AREAS_ATUACAO,
 	normalizar_abordagem,
+	normalizar_ano_inicio,
 	normalizar_conselho,
+	normalizar_formacao,
+	normalizar_lista,
 	normalizar_modalidade,
+	normalizar_video_url,
 	normalizar_texto,
 	normalizar_valor_sessao,
 	obter_campo,
@@ -28,6 +35,11 @@ COLUNAS_PROFISSIONAL = """
 	 , p.ESPECIALIDADE
 	 , p.ABORDAGEM
 	 , p.MODALIDADE
+	 , p.FORMACAO
+	 , p.ANO_INICIO_ATUACAO
+	 , p.IDIOMAS
+	 , p.AREAS_ATUACAO
+	 , p.VIDEO_URL
 	 , a.MEDIA AS AVALIACAO
 	 , COALESCE(a.TOTAL, 0) AS TOTAL_AVALIACOES
 """
@@ -47,13 +59,36 @@ LEFT JOIN (
 MENSAGEM_VALOR = "Valor em reais deve ser positivo, ate 100000, com no maximo duas casas decimais"
 MENSAGEM_DESCRICAO = "Descricao deve ter entre 10 e 1000 caracteres"
 
+# Campos opcionais do perfil: campo da API -> (normalizador, mensagem). A coluna e o nome em maiusculas.
+CAMPOS_OPCIONAIS = {
+	'abordagem': (normalizar_abordagem, "Abordagem invalida"),
+	'modalidade': (normalizar_modalidade, "Modalidade deve ser Online, Presencial ou Ambas"),
+	'formacao': (normalizar_formacao, "Formacao deve ter entre 3 e 1000 caracteres"),
+	'ano_inicio_atuacao': (normalizar_ano_inicio, "ano_inicio_atuacao deve ser um ano entre 1950 e o atual"),
+	'idiomas': (lambda valor: normalizar_lista(valor, IDIOMAS, len(IDIOMAS)),
+				"Idiomas validos: " + ", ".join(IDIOMAS)),
+	'areas_atuacao': (lambda valor: normalizar_lista(valor, AREAS_ATUACAO, MAXIMO_AREAS_ATUACAO),
+					  f"Informe ate {MAXIMO_AREAS_ATUACAO} areas de atuacao entre: " + ", ".join(AREAS_ATUACAO)),
+	'video_url': (normalizar_video_url, "video_url deve ser um link de video do YouTube ou do Vimeo"),
+}
+LISTAS = ('idiomas', 'areas_atuacao')
+
+
+def _apresentar_perfil(profissional):
+	"""Colunas opcionais do banco -> formato da API: listas e anos de experiencia."""
+	for campo in LISTAS:
+		profissional[campo] = profissional[campo].split(',') if profissional.get(campo) else []
+	ano = profissional.get('ano_inicio_atuacao')
+	profissional['anos_experiencia'] = date.today().year - ano if ano else None
+	return profissional
+
 
 def serializar_profissional(colunas, linha):
 	profissional = dict(zip(colunas, linha))
 	avaliacao = profissional['avaliacao']
 	profissional['avaliacao'] = round(float(avaliacao), 1) if avaliacao is not None else None
 	profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
-	return profissional
+	return _apresentar_perfil(profissional)
 
 
 def _especialidade(valor):
@@ -218,14 +253,37 @@ def detalhe(id_profissional):
 		return serializar_profissional([desc[0].lower() for desc in cur.description], resultado)
 
 
-def _opcional(formulario, campo, normalizar, mensagem):
-	recebido = obter_campo(formulario, campo)
-	if not recebido:
-		return None
-	valor = normalizar(recebido)
-	if valor is None:
-		raise ErroNegocio(mensagem)
-	return valor
+def _vazio(valor):
+	return valor is None or valor == [] or (isinstance(valor, str) and not valor.strip())
+
+
+def _valor(formulario, campo):
+	# Multipart pode repetir a chave das listas (idiomas=Ingles&idiomas=Libras)
+	if campo in LISTAS and hasattr(formulario, 'getlist'):
+		valores = formulario.getlist(campo)
+		return valores if len(valores) > 1 else valores[0]
+	return formulario[campo]
+
+
+def _opcionais(formulario, limpar_vazios):
+	"""{COLUNA: valor normalizado} dos campos opcionais enviados.
+
+	Vazio ou null vira None (limpa a coluna) quando limpar_vazios; senao e ignorado.
+	"""
+	resultado = {}
+	for campo, (normalizar, mensagem) in CAMPOS_OPCIONAIS.items():
+		if campo not in formulario:
+			continue
+		valor = _valor(formulario, campo)
+		if _vazio(valor):
+			if limpar_vazios:
+				resultado[campo.upper()] = None
+			continue
+		normalizado = normalizar(valor)
+		if normalizado is None:
+			raise ErroNegocio(mensagem)
+		resultado[campo.upper()] = normalizado
+	return resultado
 
 
 def cadastrar(formulario, imagem):
@@ -257,17 +315,21 @@ def cadastrar(formulario, imagem):
 	if erro_dias:
 		raise ErroNegocio(erro_dias)
 
-	abordagem = _opcional(formulario, 'abordagem', normalizar_abordagem, "Abordagem invalida")
-	modalidade = _opcional(formulario, 'modalidade', normalizar_modalidade, "Modalidade deve ser Online, Presencial ou Ambas")
+	opcionais = _opcionais(formulario, limpar_vazios=False)
 
 	with transacao() as cur:
 		usuario = criar_usuario_base(cur, formulario, imagem, configuracao["usuario_role"], exigir_confirmacao_senha=True)
-		cur.execute("""INSERT INTO profissional (
-							usuario_id, conselho_tipo, conselho_numero, especialidade,
-							preco_hora, descricao, abordagem, modalidade
-						) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-					(usuario["id_usuario"], conselho_tipo, conselho_numero, especialidade, preco_hora, descricao,
-					 abordagem, modalidade))
+		colunas = {
+			'USUARIO_ID': usuario["id_usuario"],
+			'CONSELHO_TIPO': conselho_tipo,
+			'CONSELHO_NUMERO': conselho_numero,
+			'ESPECIALIDADE': especialidade,
+			'PRECO_HORA': preco_hora,
+			'DESCRICAO': descricao,
+			**opcionais,
+		}
+		cur.execute(f"INSERT INTO PROFISSIONAL ({', '.join(colunas)}) VALUES ({', '.join('?' * len(colunas))})",
+					tuple(colunas.values()))
 	enviar_ativacao(usuario)
 
 	return {
@@ -275,22 +337,21 @@ def cadastrar(formulario, imagem):
 			"id_usuario": usuario["id_usuario"],
 			"tipo_usuario": configuracao["usuario_role"]
 		},
-		"profissional": {
+		"profissional": _apresentar_perfil({
 			"conselho_tipo": conselho_tipo,
 			"conselho_numero": conselho_numero,
 			"especialidade": especialidade,
 			"preco_hora": preco_hora,
 			"dias_atendimento": dias_atendimento,
-			"abordagem": abordagem,
-			"modalidade": modalidade
-		}
+			**{campo: opcionais.get(campo.upper()) for campo in CAMPOS_OPCIONAIS},
+		})
 	}
 
 
 def atualizar(id_profissional, formulario):
-	if not isinstance(formulario, dict) or not formulario or not set(formulario).issubset(
-			{'descricao', 'preco_hora', 'abordagem', 'modalidade'}):
-		raise ErroNegocio("Informe apenas descricao, preco_hora, abordagem e/ou modalidade")
+	permitidos = {'descricao', 'preco_hora', *CAMPOS_OPCIONAIS}
+	if not isinstance(formulario, dict) or not formulario or not set(formulario).issubset(permitidos):
+		raise ErroNegocio("Campos permitidos: " + ", ".join(sorted(permitidos)))
 
 	atualizacoes = {}
 	if 'descricao' in formulario:
@@ -303,23 +364,7 @@ def atualizar(id_profissional, formulario):
 		if preco_hora is None:
 			raise ErroNegocio(MENSAGEM_VALOR)
 		atualizacoes['PRECO_HORA'] = preco_hora
-	# Vazio ou null limpa a coluna.
-	for campo, normalizar, mensagem in (
-		('abordagem', normalizar_abordagem, "Abordagem invalida"),
-		('modalidade', normalizar_modalidade, "Modalidade deve ser Online, Presencial ou Ambas"),
-	):
-		if campo not in formulario:
-			continue
-		valor = formulario[campo]
-		if valor is not None and not isinstance(valor, str):
-			raise ErroNegocio(mensagem)
-		if valor is None or not valor.strip():
-			atualizacoes[campo.upper()] = None
-			continue
-		normalizado = normalizar(valor)
-		if normalizado is None:
-			raise ErroNegocio(mensagem)
-		atualizacoes[campo.upper()] = normalizado
+	atualizacoes.update(_opcionais(formulario, limpar_vazios=True))
 
 	with transacao() as cur:
 		definicoes = ", ".join(f"{coluna} = ?" for coluna in atualizacoes)

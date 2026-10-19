@@ -51,7 +51,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 |---|---|---|
 | `/api/auth` | `POST login`, `login_mobile`, `verificar_codigo`, `esqueci_senha`, `alterar_senha`, `alterar_senha_logado`, `logout` | público / logado |
 | `/api/usuarios` | `GET/PUT/PATCH /me`, `GET /`, `POST /` (cadastro paciente), `POST /logout` | logado / público |
-| `/api/profissionais` | `GET /` (filtros `nome`, `especialidade`, `tipo_conselho`, `preco_min/max`, `disponibilidade_inicio/fim`, `abordagem`, `modalidade`, `avaliacao_min`), `GET /<id>`, `POST /` (cadastro), `PATCH /me` (descrição, preço, abordagem, modalidade). Cada profissional vem com `especialidade`, `abordagem`, `modalidade`, `avaliacao` (média com 1 casa ou `null`) e `total_avaliacoes` | público / profissional |
+| `/api/profissionais` | `GET /` (filtros `nome`, `especialidade`, `tipo_conselho`, `preco_min/max`, `disponibilidade_inicio/fim`, `abordagem`, `modalidade`, `avaliacao_min`), `GET /<id>`, `POST /` (cadastro), `PATCH /me` (descrição, preço e os campos opcionais do perfil; `null`/vazio limpa). Cada profissional vem com `especialidade`, `abordagem`, `modalidade`, `formacao`, `ano_inicio_atuacao`, `anos_experiencia` (calculado), `idiomas` e `areas_atuacao` (listas, `[]` se vazio), `video_url` (embed), `avaliacao` (média com 1 casa ou `null`) e `total_avaliacoes` | público / profissional |
 | `/api/registros` | `GET/POST /` (diário, paginação `limite`/`antes`), `GET /evolucao?dias=7\|30\|90` (`resumo` + `evolucaoHumor`, mesmo cálculo e formato do prontuário) | só paciente, próprios registros |
 | `/api/consultas` | `GET /` (inclui `nota_avaliacao`), `POST /` (agendar), `PATCH /<sessao_id>` (horário, link, status), `POST /<sessao_id>/avaliacao` (nota 1–5 e comentário; só paciente, sessão `REALIZADO`, uma vez) | logado |
 | `/api/prontuario` | `GET /<paciente_id>?dias=7\|30\|90` | profissional com sessão não cancelada com o paciente |
@@ -62,7 +62,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 ## Modelo de dados (`database/schema.sql`)
 
 - `USUARIO`: base de todos (role, CPF, senha bcrypt, `codigo` de 6 dígitos para ativação/recuperação, `ativo`).
-- `PROFISSIONAL`: 1:1 com usuário (`USUARIO_ID`), conselho CRP/CRM, preço, dias de atendimento, `ABORDAGEM` (lista `ABORDAGENS` em `funcao.py`) e `MODALIDADE` (`dm_modalidade`: `ONLINE/PRESENCIAL/AMBAS`), as duas opcionais. O filtro de modalidade inclui sempre `AMBAS`.
+- `PROFISSIONAL`: 1:1 com usuário (`USUARIO_ID`), conselho CRP/CRM, preço, dias de atendimento, `ABORDAGEM` (lista `ABORDAGENS` em `funcao.py`) e `MODALIDADE` (`dm_modalidade`: `ONLINE/PRESENCIAL/AMBAS`). O filtro de modalidade inclui sempre `AMBAS`. Perfil completo, todos opcionais: `FORMACAO`, `ANO_INICIO_ATUACAO` (guarda o ano, não os anos, para não envelhecer), `IDIOMAS` e `AREAS_ATUACAO` (nomes canônicos de `IDIOMAS`/`AREAS_ATUACAO` em `funcao.py`, separados por vírgula; até 8 áreas) e `VIDEO_URL` (só YouTube/Vimeo, gravado já como URL de embed `youtube-nocookie.com/embed/<id>` ou `player.vimeo.com/video/<id>`). Os campos opcionais ficam em `CAMPOS_OPCIONAIS` (`services/profissionais_service.py`): incluir um campo novo é uma linha ali, mais a coluna.
 - `REGISTRO`: diário do paciente (humor, sono, alimentação, exercício, anotação BLOB).
 - `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`.
 - `SESSAO`: consulta paciente × profissional; `STATUS` `AGENDADO/CONFIRMADO/REALIZADO/CANCELADO`, `VALOR_CENTAVOS` inteiro, FK opcional para encaminhamento e conversa.
@@ -88,6 +88,8 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 **Fotos de perfil.** Upload pelo Pillow (corrige EXIF, converte para JPEG, máx. 512×512) para o bucket R2 `psicodaily` em `usuarios/<id>.jpg`, `Cache-Control: no-cache`. A URL é derivada do ID (`url_foto_usuario`), sem coluna no banco.
 
 ## Execução e deploy
+
+- **Produção no Northflank** (combined service com build da `main`). Toda decisão de infra parte disso. Firebird não é addon do Northflank, então o banco tem que viver num volume Single Read/Write do serviço: 1 instância e alguns segundos fora do ar por deploy. Hoje o `.FDB` ainda vai dentro da imagem e é sobrescrito a cada deploy. A correção (volume, migrations no start, backup e CI) é a F0 em `plans/ultima-sprint.md`.
 
 - **Docker**: `python:3.14-slim` + Firebird 4 no mesmo container; `docker-entrypoint.sh` sobe o Firebird, define a senha SYSDBA e inicia gunicorn em `:8000`. `TZ=America/Sao_Paulo` (as rotas comparam com `datetime.now()` local).
 - **Dev (WSL)**: `run.sh` sobe um gunicorn ouvindo em `127.0.0.1:8000` e `:8001`.

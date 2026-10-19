@@ -20,7 +20,7 @@ Cada fase termina com os testes verdes. Cada domínio refatorado ou cada feature
 O repositório `cavalliniph/psicodaily-api` é **público** no GitHub.
 
 1. **Revogar a senha de app do Gmail** `psicodaily.contato@gmail.com` (estava em `funcao.py:59`, hoje em `services/email_service.py`, desde o commit `5750063`). Gerar uma nova e colocá-la só no `.env` (item S1). Apagar do código não basta: ela já está no histórico público.
-2. **`database/BANCO.FDB` versionado e público**: contém CPF, e-mail, telefone, hash de senha e diário de humor (dado de saúde, LGPD art. 11). Decidir com o time:
+2. **`database/BANCO.FDB` versionado e público** (a F0 tira o arquivo do git e da imagem daqui em diante): contém CPF, e-mail, telefone, hash de senha e diário de humor (dado de saúde, LGPD art. 11). Decidir com o time:
    - tornar o repo privado (mais rápido), **ou**
    - trocar o `.FDB` por um banco só com dados fictícios e reescrever o histórico (`git filter-repo --path database/BANCO.FDB --invert-paths`, com force push combinado com o time).
    O `.gitignore` já tem `database/*.FDB`, mas o arquivo foi adicionado antes e continua rastreado.
@@ -156,7 +156,56 @@ Cada correção leva um assert em `tests/test_seguranca.py` (ex.: 6ª tentativa 
 
 ## 3. Fundações
 
-Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só quando a primeira feature que a usa entrar.
+Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só quando a primeira feature que a usa entrar. A exceção é a F0, que vem **antes da próxima feature**.
+
+### F0. Banco persistente, migrations e CI no Northflank
+
+**Por que agora:** o `Dockerfile` copia o `database/BANCO.FDB` do repositório para a imagem, e o Firebird abre esse arquivo. No Northflank o disco do container é efêmero: a cada deploy, o banco de produção volta a ser a cópia do git, e tudo o que os usuários gravaram desde o deploy anterior some. No caminho inverso, dados pessoais do banco de desenvolvimento vão para o repo público (item 0.2). Cada feature nova com tabela ou coluna piora as duas coisas.
+
+**Restrições do Northflank que definem o desenho**
+- Firebird não existe como addon (só Postgres, MySQL, MongoDB, Redis, RabbitMQ e MinIO). O banco fica num **volume** anexado a um serviço.
+- Volume *Single Read/Write*: o serviço fica com 1 instância (o signaling já exige isso) e, no deploy, o container antigo termina antes de o novo subir. São alguns segundos fora do ar por deploy, e só um processo abre o `.FDB` por vez, o que é bom para o Firebird.
+- Um job não monta esse volume enquanto o serviço está de pé. Por isso a migration roda **no start do próprio container**: é o padrão *command override* da documentação do Northflank (migra e só sobe o app se der certo), e não um job separado.
+- Volumes têm snapshot nativo, com agenda (hourly, daily ou weekly) e retenção, e podem ser clonados a partir de um snapshot.
+
+**Desenho**
+
+| Peça | Como |
+|---|---|
+| Volume | `psicodaily-db`, Single Read/Write, montado em `/data` no serviço da API. Não em `/app/database`, para não esconder arquivos da imagem. `DB_DATABASE=/data/BANCO.FDB`; o entrypoint faz `chown -R firebird:firebird /data` |
+| Imagem | Só código: `database/*.FDB` entra no `.dockerignore` e sai do git (`git rm --cached`). Sai também o `chown` do `.FDB` no `Dockerfile` |
+| Primeiro boot | Se `/data/BANCO.FDB` não existe, o entrypoint cria um banco vazio (`CREATE DATABASE` via `isql-fb`) e as migrations montam o schema |
+| Migrations | `database/migrations/NNNN_descricao.sql`, aplicadas em ordem por `database/migrar.py` (~50 linhas, com o `fdb` que já está instalado). Controle na tabela `SCHEMA_MIGRATION (VERSAO, NOME, APLICADA_EM)`. Cada arquivo roda numa transação só: se falhar, nada fica pela metade |
+| Baseline | `0001_inicial.sql`, gerado do banco atual com `isql-fb -x`. O `schema.sql` não roda do zero: tem comentário `//`, `SESSAO.CRIADO_EM` duplicado e FKs para `USUARIO(USUARIO_ID)`. No banco de produção, o `0001` só é registrado como aplicado. O `schema.sql` sai do repo depois disso |
+| Entrypoint | 1. sobe o Firebird → 2. `gbak` para `/data/backups/antes-<sha>.fbk` (guarda os 5 últimos) → 3. `migrar.py` → 4. `exec gunicorn`, só se 2 e 3 terminarem com exit 0 |
+| Backup | Snapshot diário do volume, com 14 dias de retenção (backup schedule do Northflank), mais o `gbak` de antes de cada deploy. O `gbak` é consistente; o snapshot pega o arquivo com o Firebird rodando |
+| Health check | `GET /api/saude` (200 se `SELECT 1` responde) como readiness probe, para o Northflank só mandar tráfego depois de migrar e subir |
+| Segredos | `DB_PASSWORD`, `SECRET_KEY` e as credenciais da Arkhé, do R2 e do SMTP num secret group do projeto. O entrypoint passa a usar `DB_PASSWORD` no lugar do `'sysdba'` fixo, o que adianta o S14 |
+| Dev local | `python database/migrar.py` no banco local, mais `database/seed.sql` com dados **fictícios**: os usuários 22, 23 e 25 que os testes usam, com CPFs inventados. Para um banco limpo, basta apagar o `.FDB` e rodar os dois |
+
+**Regras para alterar tabelas sem perder dados**
+1. Migration aplicada nunca é editada; corrige-se com uma migration nova.
+2. No mesmo deploy, só mudanças aditivas: coluna `NULL` ou com `DEFAULT`, tabela nova, índice. O código da versão anterior continua funcionando com o schema novo, então voltar o deploy é seguro.
+3. Mudança destrutiva em dois deploys (expand/contract): o deploy 1 cria o novo e copia os dados; o deploy 2, depois de confirmado, remove o antigo.
+4. DDL e DML em arquivos separados: no Firebird, uma coluna criada só pode ser usada por `UPDATE` depois do commit.
+
+**CI/CD**
+- **GitHub Actions** (`.github/workflows/ci.yml`), em todo PR e push na `main`: serviço Firebird 4 (`firebirdsql/firebird`), `apt install libfbclient2`, `pip install -r requirements.txt`, banco vazio → `migrar.py` do zero → `seed.sql` → os scripts de `tests/`. Isso pega SQL quebrado e regressão antes do deploy.
+- **Proteção da `main`** no GitHub: merge só por PR com o CI verde. O Northflank continua com build e deploy automáticos da `main` (combined service), então só código testado chega lá. Se o time preferir continuar com push direto na `main`, a alternativa é desligar o CD automático e fazer o último passo do Actions disparar o workflow do Northflank por webhook.
+- **Deploy:** build da `main` → deploy → entrypoint (backup, migration, app) → readiness probe. Se a migration falhar, o container não fica saudável: corrige-se com uma migration nova ou com redeploy do build anterior, que funciona no schema atual por causa das regras 2 e 3.
+- **Restauração:** `gbak -c` a partir de `/data/backups` via `northflank exec service`, ou clonar o volume a partir de um snapshot e anexá-lo ao serviço.
+
+**Implantação (uma vez)**
+1. Local: gerar o `0001` e escrever `migrar.py`, `seed.sql`, `GET /api/saude` e o entrypoint novo. Testar subindo do zero no Docker local, com `docker run -v` montando `/data`.
+2. Northflank: criar o volume e o secret group, e agendar o snapshot.
+3. Copiar o banco de produção atual para o volume: `northflank download service file --remotePath /app/database/BANCO.FDB` do container em execução → `northflank upload service file --remotePath /data/BANCO.FDB` (ou `gbak` via `exec`). Registrar o `0001` como aplicado.
+4. Deploy da imagem nova, sem `.FDB`, apontando para `/data`. Conferir login, busca e uma consulta.
+5. `git rm --cached database/BANCO.FDB`. Isso resolve o item 0.2 daqui em diante; o histórico continua com o arquivo até rodar `git filter-repo` ou tornar o repo privado.
+6. Workflow do Actions e proteção da `main`.
+7. Atualizar `CLAUDE.md` e `architecture.md`: comandos de dev, deploy e "Pontos de atenção".
+
+**Pronto quando:** um deploy da `main` com uma migration nova mantém os dados de produção; o CI aplica as migrations do zero e os testes passam; existem um snapshot e um `gbak` recentes.
+Esforço: M (2 a 4 dias), quase tudo na implantação única.
 
 | ID | Fundação | O que é | Desbloqueia |
 |---|---|---|---|
@@ -165,12 +214,12 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 | F3 | **Notificações** | Tabela `NOTIFICACAO (USUARIO_ID, TIPO, DADOS, LIDA, CRIADO_EM)` + `notificacoes_service.notificar(usuario_id, tipo, dados)`, que grava e despacha nos canais ativos (e-mail hoje, WhatsApp/push depois). `GET /api/notificacoes` | 4, 6, 13, 14, 27, 30 |
 | F4 | **Auth para mobile** | Decorators aceitam `Authorization: Bearer` além do cookie (hoje `login_mobile` devolve o token, mas nenhuma rota lê o header). Inclui o WS do signaling | 1, 4, 23, 27 |
 | F5 | **Auditoria** | Tabela `AUDITORIA (USUARIO_ID, ACAO, ENTIDADE, ENTIDADE_ID, IP, CRIADO_EM)` + `auditar(cur, ...)` chamado dentro dos services, na mesma transação | 20, 10, 11, 18 |
-| F6 | **Arquivos privados** | Segundo bucket R2, privado, com URL assinada de curta duração (`generate_presigned_url` do boto3, já instalado) | 3 (vídeo), 11, 19 |
-| F7 | **Jobs periódicos** | Thread daemon iniciada no `app.py` que roda a cada minuto (lembretes, lista de espera, reconciliação de pagamento). Cabe no processo único. `ponytail:` vira cron externo (Northflank job) se o processo for replicado | 6, 30 |
+| F6 | **Arquivos privados** | Segundo bucket R2, privado, com URL assinada de curta duração (`generate_presigned_url` do boto3, já instalado) | 11, 19 |
+| F7 | **Jobs periódicos** | Thread daemon iniciada no `app.py` que roda a cada minuto (lembretes, lista de espera, reconciliação de pagamento). Cabe no processo único. Um cron job do Northflank não montaria o volume do banco (F0), então teria que chamar uma rota interna da API em vez de abrir o `.FDB` | 6, 30 |
 | F8 | **Papel ADMIN** | `dm_role` não tem `ADMIN`, mas `usuarios.py` e `consultas.py` já checam esse papel. `ALTER DOMAIN` + decorator `admin_autenticado` | 25, S9 |
 
-Schema: sem migrações. Toda mudança vai no `schema.sql` **e** é aplicada no `BANCO.FDB`, como no plano `filtros-busca-profissionais.md`.
-Corrigir junto, no schema: as FKs de `CONVERSA_*` e `ENCAMINHAMENTO` apontam para `USUARIO(USUARIO_ID)`, mas a coluna é `ID_USUARIO`; as PKs de `CONVERSA*` não são `IDENTITY`; o default de `SESSAO.STATUS` é `'AGENDADA'`, que o domínio rejeita.
+Schema: até a F0 ficar pronta, toda mudança vai no `schema.sql` **e** é aplicada no `BANCO.FDB`. Depois dela, cada mudança é um arquivo novo em `database/migrations/`.
+Corrigir numa migration logo depois do baseline: as FKs de `CONVERSA_*` e `ENCAMINHAMENTO` apontam para `USUARIO(USUARIO_ID)`, mas a coluna é `ID_USUARIO`; as PKs de `CONVERSA*` não são `IDENTITY`; o default de `SESSAO.STATUS` é `'AGENDADA'`, que o domínio rejeita.
 
 ---
 
@@ -185,8 +234,8 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 | 28 | Acompanhamento de humor com gráficos | **Feito** (19/10/2026): `GET /api/registros/evolucao?dias=7\|30\|90` devolve `dias`, `resumo` e `evolucaoHumor`; o cálculo (`registros_service.evolucao`) é o mesmo do prontuário | P |
 | 26 | Diário pessoal | **Já existe** (`/api/registros`, com anotação livre). "Privado" na descrição da sprint foi tratado como erro (19/10/2026). Falta só `PATCH`/`DELETE /api/registros/<id>`, se o front precisar | P |
 | 29 | Busca por especialidade, abordagem, preço, disponibilidade, modalidade, avaliação | **Feito** (`filtros-busca-profissionais.md`). Falta só a disponibilidade usar F1 em vez de "sem conflito" | P (com F1) |
-| 15 | Filtros avançados | Somar aos de 29: `idioma`, `experiencia_min`, `ordenar=preco\|avaliacao\|experiencia`. Depende dos campos de 3 | P |
-| 3 | Perfil completo (formação, especialidades, abordagem, experiência, idiomas, vídeo) | `PROFISSIONAL`: `FORMACAO BLOB`, `ANOS_EXPERIENCIA SMALLINT`, `IDIOMAS VARCHAR(200)` (lista fixa em `funcao.py`, como `ABORDAGENS`), `VIDEO_URL`. Vídeo: **?** link do YouTube/Vimeo (P) ou upload para R2 (M, F6). Aceitar no cadastro e no `PATCH /me`, devolver na busca | M |
+| 15 | Filtros avançados | Somar aos de 29: `idioma`, `area_atuacao`, `experiencia_min`, `ordenar=preco\|avaliacao\|experiencia`. Campos já existem (feature 3); filtrar lista com `(',' \|\| p.IDIOMAS \|\| ',') CONTAINING ',<nome>,'` | P |
+| 3 | Perfil completo (formação, especialidades, abordagem, experiência, idiomas, vídeo) | **Feito no backend** (19/10/2026): `formacao`, `ano_inicio_atuacao` (+ `anos_experiencia`), `idiomas`, `areas_atuacao` ("especialidades" = áreas de atuação, lista fixa, até 8) e `video_url` (só link do YouTube/Vimeo, normalizado para embed), no cadastro, no `PATCH /me`, na busca e no detalhe. Front: mostrar os campos e trocar o `experiencia` de `DescricaoPsicologo.jsx` por `anos_experiencia` | M |
 | 7 | Favoritar psicólogos e acompanhar disponibilidade | `FAVORITO (PACIENTE_ID, PROFISSIONAL_ID, PK composta)`; `POST/DELETE /api/favoritos/<id>`, `GET /api/favoritos` com o próximo horário livre (F1) | P + F1 |
 | 8 | Conteúdos e artigos no perfil | `CONTEUDO (PROFISSIONAL_ID, TITULO, CORPO BLOB, PUBLICADO_EM)`; CRUD em `/api/conteudos` para o dono, `GET /api/profissionais/<id>/conteudos` público. Texto puro ou Markdown, **sem HTML** (XSS no front) | M |
 | 14 | Avisar quando o outro entrar na sala | **Feito no backend** (19/10/2026): eventos `peers`/`peer-joined`/`peer-left` no WS e e-mail com link para quem ainda não entrou. Falta o front (`TesteVideo.jsx`) mostrar a presença. Quando F3 existir, trocar o e-mail por `notificar()` | P |
@@ -235,8 +284,8 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 
 ### Sequência sugerida
 
-1. Fase 0 → Fase 1 (refatoração) → Fase 2 (S1 a S13 pelo menos)
-2. Onda A: 28, 14, 3, 7 (com F1), 8, F5+20, F8+25
+1. Fase 0 → Fase 1 (refatoração). A Fase 2 (segurança) ficou para o final, a pedido do time
+2. Onda A: 28, 14 e 3 (feitas) → **F0 (banco persistente, migrations e CI no Northflank)** → 7 (com F1), 8, F5+20, F8+25
 3. F1 agenda → 6, 29 completo; F2 → 24, 32, 17; F3 → 4/27
 4. 5 → 2; 30 → 13 → 12/31; 18 → 19
 5. 16/21/22 e 11 por último: mais caros e com mais decisões em aberto
@@ -251,3 +300,5 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 6. Provedor de WhatsApp (30)
 7. Transcrição: consentimento, retenção, acesso (11)
 8. Planos de assinatura (9)
+9. F0: merge na `main` só por PR com CI verde, ou manter push direto e disparar o deploy do Northflank pelo Actions?
+10. F0: aceitar alguns segundos fora do ar por deploy (volume Single Read/Write)?
