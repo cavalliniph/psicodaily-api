@@ -160,7 +160,9 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 
 ### F0. Banco persistente, migrations e CI no Northflank
 
-**Status (19/10/2026): a parte de código está pronta na branch `f0-migrations`, que não vai para a `main` antes dos passos 2 a 4 da implantação.** O Northflank faz deploy automático da `main`, e a imagem nova não leva mais o `.FDB`: sem o volume preparado, a produção sobe sem banco (o entrypoint se recusa a criar um vazio sem `CRIAR_BANCO=1`, então o deploy falha em vez de apagar dados). Já testado:
+**Status (19/10/2026): implantada em produção.** Banco no volume `firebird-data` (`/var/lib/firebird/data/BANCO.FDB`), baseline aplicado, entrypoint novo no ar (`6256598`), readiness probe em `/api/saude`, `BANCO.FDB` fora do git. Conferido: as contagens de usuários, sessões e registros batem entre o banco antigo e o do volume, e os dados sobreviveram a três deploys seguidos. **Pendências:** (1) backup fora do volume, porque o Northflank recusou o backup agendado ("This feature is not enabled for your account"); proposta: `gbak` diário enviado para um bucket R2 privado, por uma rota interna chamada por um cron job do Northflank ou pela thread da F7; (2) proteção da `main` no GitHub (passo 7); (3) senha forte do banco, adiada para a fase de segurança (S14).
+
+Histórico da implantação, mantido como referência: O Northflank faz deploy automático da `main`, e a imagem nova não leva mais o `.FDB`: sem o volume preparado, a produção sobe sem banco (o entrypoint se recusa a criar um vazio sem `CRIAR_BANCO=1`, então o deploy falha em vez de apagar dados). Já testado:
 - todos os `tests/` num banco criado do zero (migrations + seed), localmente e contra a imagem oficial `firebirdsql/firebird:4`, como no CI;
 - o container com volume Docker: banco novo; deploy normal com backup e dados preservados; banco de produção sem baseline (recusa subir); baseline local seguido de upload; migration nova; migration quebrada (não sobe e não deixa nada pela metade); rollback para a imagem anterior.
 
@@ -209,16 +211,16 @@ Estado do Northflank conferido em 19/10/2026 (só leitura):
 - Não há backup agendado nem health check.
 
 1. ~~Local: `0001`, `migrar.py`, `seed.sql`, `GET /api/saude`, entrypoint e CI.~~ Feito na branch `f0-migrations` (CI verde no GitHub).
-2. **Sem downtime:** colocar uma `DB_PASSWORD` forte no secret group (sem aspas simples; o entrypoint novo passa a usá-la) e criar o backup agendado diário do volume `firebird-data`, com 14 dias de retenção.
-3. **Janela de poucos minutos** (o que for gravado entre 3a e 4 se perde). Tudo pelo `northflank exec service`, dentro do container atual:
+2. ~~Backup agendado do volume~~: indisponível na conta (ver pendências). A senha forte ficou para o S14.
+3. ~~**Janela de poucos minutos**~~ Feito às 19h05 (BRT) (o que for gravado entre 3a e 4 se perde). Tudo pelo `northflank exec service`, dentro do container atual:
    - a. `gbak -b -user SYSDBA -password <senha atual> 127.0.0.1:/app/database/BANCO.FDB /var/lib/firebird/data/inicial.fbk`, que é consistente mesmo com o banco aberto;
    - b. `gbak -c -user SYSDBA -password <senha atual> /var/lib/firebird/data/inicial.fbk 127.0.0.1:/var/lib/firebird/data/BANCO.FDB`;
    - c. baseline: `northflank upload service file --localPath database --remotePath /tmp/f0/database` e depois `cd /tmp/f0 && DB_DATABASE=/var/lib/firebird/data/BANCO.FDB python database/migrar.py --baseline 1`.
-4. Trocar `DB_DATABASE` para `/var/lib/firebird/data/BANCO.FDB` no serviço. Isso redeploya a **imagem atual**, que já funciona com o banco no volume, e é aqui que os dados passam a sobreviver aos deploys. Conferir login e busca; fazer um restart e conferir de novo.
-5. Merge da `f0-migrations` na `main`: o entrypoint novo faz backup, migra e sobe. No log, conferir "Backup antes das migrations" e "schema em dia". Depois disso, readiness probe HTTP em `/api/saude`, porta 8000. Antes do merge ela não funciona, porque a imagem antiga não tem a rota.
-6. `git rm --cached database/BANCO.FDB` na `main`. Daqui em diante os dados pessoais param de ir para o repo; o histórico só limpa com `git filter-repo` ou com o repo privado.
+4. ~~Feito às 19h06.~~ Trocar `DB_DATABASE` para `/var/lib/firebird/data/BANCO.FDB` no serviço. Isso redeploya a **imagem atual**, que já funciona com o banco no volume, e é aqui que os dados passam a sobreviver aos deploys. Conferir login e busca; fazer um restart e conferir de novo.
+5. ~~Feito às 19h08 e probe às 19h10.~~ Merge da `f0-migrations` na `main`: o entrypoint novo faz backup, migra e sobe. No log, conferir "Backup antes das migrations" e "schema em dia". Depois disso, readiness probe HTTP em `/api/saude`, porta 8000. Antes do merge ela não funciona, porque a imagem antiga não tem a rota.
+6. ~~Feito.~~ `git rm --cached database/BANCO.FDB` na `main`. Daqui em diante os dados pessoais param de ir para o repo; o histórico só limpa com `git filter-repo` ou com o repo privado.
 7. Proteção da `main` no GitHub: merge só por PR com o job `CI / testes` verde.
-8. Atualizar `CLAUDE.md` e `architecture.md` com o caminho real do banco em produção.
+8. ~~Feito.~~ Atualizar `CLAUDE.md` e `architecture.md` com o caminho real do banco em produção.
 
 **Pronto quando:** um deploy da `main` com uma migration nova mantém os dados de produção; o CI aplica as migrations do zero e os testes passam; existem um snapshot e um `gbak` recentes. Teste final recomendado: logo depois do passo 4, fazer um deploy vazio (redeploy) e conferir que os dados continuam lá.
 Esforço: M (2 a 4 dias), quase tudo na implantação única.
