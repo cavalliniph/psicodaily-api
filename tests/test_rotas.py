@@ -84,9 +84,26 @@ try:
     checar(paciente.get('/api/registros/?limite=0'), 400, 'error')
     checar(paciente.get('/api/registros/'), 200, 'registros', 'proximo_cursor')
     checar(paciente.post('/api/registros/', json={'humor': 'X'}), 400, 'error')
+    checar(profissional.get('/api/registros/evolucao'), 403, 'error')
+    checar(paciente.get('/api/registros/evolucao?dias=5'), 400, 'error')
+    checar(paciente.get('/api/registros/evolucao?dias=x'), 400, 'error')
+    hoje = datetime.now().date().isoformat()
+
+    def humor_de_hoje():
+        corpo = checar(paciente.get('/api/registros/evolucao?dias=7'), 200, 'dias', 'resumo', 'evolucaoHumor')
+        dia = next((d for d in corpo['evolucaoHumor'] if d['data'] == hoje), {'valor': 0, 'quantidade': 0})
+        return corpo['resumo']['totalRegistros'], dia['valor'] * dia['quantidade'], dia['quantidade']
+
+    total_antes, soma_antes, qtd_antes = humor_de_hoje()
     registro = checar(paciente.post('/api/registros/', json={'humor': 'BOM', 'qualidade_sono': 'BOA'}), 201, 'registro')['registro']
     criados['REGISTRO'].append(registro['registro_id'])
     assert registro['usuario_id'] == PACIENTE and registro['humor'] == 'BOM', registro
+    ruim = checar(paciente.post('/api/registros/', json={'humor': 'RUIM', 'qualidade_sono': 'RUIM'}), 201, 'registro')['registro']
+    criados['REGISTRO'].append(ruim['registro_id'])
+    # BOM vale 4 e RUIM vale 2: a media do dia passa a incluir os dois
+    total, soma, qtd = humor_de_hoje()
+    assert (total, qtd) == (total_antes + 2, qtd_antes + 2), (total, qtd, total_antes, qtd_antes)
+    assert abs(soma - (soma_antes + 6)) < 1e-9, (soma, soma_antes)
 
     # consultas
     checar(anonimo.get('/api/consultas/'), 401, 'error')
@@ -122,6 +139,9 @@ try:
     pront = checar(profissional.get(f'/api/prontuario/{PACIENTE}'), 200, 'paciente', 'ultimaConsulta',
                    'resumo', 'evolucaoHumor', 'registros', 'proximo_cursor')
     assert any(r['registro_id'] == registro['registro_id'] for r in pront['registros']), pront
+    # Paciente e profissional enxergam o mesmo calculo
+    proprio = paciente.get('/api/registros/evolucao?dias=30').get_json()
+    assert (proprio['resumo'], proprio['evolucaoHumor']) == (pront['resumo'], pront['evolucaoHumor']), (proprio, pront)
 
     # encaminhamentos
     checar(paciente.get('/api/encaminhamentos/'), 403, 'error')

@@ -25,3 +25,17 @@ def registros(dados_usuario):
         resposta, status = jsonify(registros_service.listar(usuario_id, limite, antes)), 200
     resposta.headers['Cache-Control'] = 'private, no-store'
     return resposta, status
+
+
+@registros_bp.route('/evolucao', methods=['GET'])
+@usuario_autenticado
+def evolucao(dados_usuario):
+    if dados_usuario.get('usuario_role') != 'PACIENTE' or not dados_usuario.get('id_usuario'):
+        return jsonify({'error': 'Acesso exclusivo do paciente aos proprios registros'}), 403
+    try:
+        dias = int(request.args.get('dias', 30))
+    except ValueError:
+        return jsonify({'error': 'dias deve ser 7, 30 ou 90'}), 400
+    resposta = jsonify(registros_service.evolucao_paciente(dados_usuario['id_usuario'], dias))
+    resposta.headers['Cache-Control'] = 'private, no-store'
+    return resposta

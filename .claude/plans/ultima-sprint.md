@@ -143,7 +143,7 @@ Leitura completa de `app.py`, `funcao.py`, `util/`, `database/db.py`, `services/
 | S20 | Baixa | `pagamentos.py` | `detalhes` repassa ao cliente a resposta crua da Arkhé | Logar o detalhe e devolver só a mensagem |
 | S21 | Baixa | `auth.py` login | `email`/`senha` não-string ou `SENHA` nula no banco geram 500 | Checar `isinstance(..., str)` |
 | S22 | Info | `upload_service.py` | Bucket R2 público (`r2.dev`): serve para foto de perfil, **não** para documentos do chat nem transcrições | Bucket privado + URL assinada (fundação F6) |
-| S23 | Info | `prontuario.py` | O profissional vê a `anotacao` de todos os registros do paciente, e o vínculo nunca expira | Decisão de produto na feature 26 (diário privado) |
+| S23 | Info | `prontuario.py` | O profissional vê a `anotacao` de todos os registros do paciente, e o vínculo nunca expira | Aceito: a sprint não pede diário privado (ver feature 26). Rever só se o produto pedir |
 
 CSRF nas rotas JSON: baixo risco. `get_json` exige `Content-Type: application/json`, o que força preflight, e o preflight é barrado pelo CORS. Manter todas as rotas autenticadas só com JSON ou multipart via `PATCH`, nunca `POST` de formulário com cookie.
 
@@ -182,8 +182,8 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 
 | # | Tarefa | Backend | Esf. |
 |---|---|---|---|
-| 28 | Acompanhamento de humor com gráficos | `GET /api/registros/evolucao?dias=7\|30\|90` reutilizando `prontuario_service.evolucao_humor()` | P |
-| 26 | Diário pessoal privado | **?** Diário separado ou flag no registro. Sugestão: coluna `REGISTRO.COMPARTILHADO BOOLEAN DEFAULT TRUE`; o prontuário omite a `anotacao` quando for `FALSE` | P |
+| 28 | Acompanhamento de humor com gráficos | **Feito** (19/10/2026): `GET /api/registros/evolucao?dias=7\|30\|90` devolve `dias`, `resumo` e `evolucaoHumor`; o cálculo (`registros_service.evolucao`) é o mesmo do prontuário | P |
+| 26 | Diário pessoal | **Já existe** (`/api/registros`, com anotação livre). "Privado" na descrição da sprint foi tratado como erro (19/10/2026). Falta só `PATCH`/`DELETE /api/registros/<id>`, se o front precisar | P |
 | 29 | Busca por especialidade, abordagem, preço, disponibilidade, modalidade, avaliação | **Feito** (`filtros-busca-profissionais.md`). Falta só a disponibilidade usar F1 em vez de "sem conflito" | P (com F1) |
 | 15 | Filtros avançados | Somar aos de 29: `idioma`, `experiencia_min`, `ordenar=preco\|avaliacao\|experiencia`. Depende dos campos de 3 | P |
 | 3 | Perfil completo (formação, especialidades, abordagem, experiência, idiomas, vídeo) | `PROFISSIONAL`: `FORMACAO BLOB`, `ANOS_EXPERIENCIA SMALLINT`, `IDIOMAS VARCHAR(200)` (lista fixa em `funcao.py`, como `ABORDAGENS`), `VIDEO_URL`. Vídeo: **?** link do YouTube/Vimeo (P) ou upload para R2 (M, F6). Aceitar no cadastro e no `PATCH /me`, devolver na busca | M |
@@ -236,7 +236,7 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 ### Sequência sugerida
 
 1. Fase 0 → Fase 1 (refatoração) → Fase 2 (S1 a S13 pelo menos)
-2. Onda A: 28, 26, 14, 3, 7 (com F1), 8, F5+20, F8+25
+2. Onda A: 28, 14, 3, 7 (com F1), 8, F5+20, F8+25
 3. F1 agenda → 6, 29 completo; F2 → 24, 32, 17; F3 → 4/27
 4. 5 → 2; 30 → 13 → 12/31; 18 → 19
 5. 16/21/22 e 11 por último: mais caros e com mais decisões em aberto
@@ -244,11 +244,10 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 ### Decisões para levar ao time (agrupadas)
 
 1. Repo privado ou limpeza do histórico (0.2)
-2. Diário: flag de compartilhamento ou diário separado (26)
-3. Vídeo de apresentação: link externo ou upload (3)
-4. Regras de cancelamento e reembolso; a Arkhé estorna PIX? (24)
-5. A Arkhé tem cartão e boleto? Senão, qual gateway (17)
-6. Taxa da plataforma e forma de repasse (32)
-7. Provedor de WhatsApp (30)
-8. Transcrição: consentimento, retenção, acesso (11)
-9. Planos de assinatura (9)
+2. Vídeo de apresentação: link externo ou upload (3)
+3. Regras de cancelamento e reembolso; a Arkhé estorna PIX? (24)
+4. A Arkhé tem cartão e boleto? Senão, qual gateway (17)
+5. Taxa da plataforma e forma de repasse (32)
+6. Provedor de WhatsApp (30)
+7. Transcrição: consentimento, retenção, acesso (11)
+8. Planos de assinatura (9)

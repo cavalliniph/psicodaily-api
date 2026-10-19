@@ -1,5 +1,10 @@
+from datetime import date, timedelta
+
 from database.db import transacao
 from services.erros import ErroNegocio
+
+ESCALA_HUMOR = {'PESSIMO': 1, 'RUIM': 2, 'NEUTRO': 3, 'BOM': 4, 'EXCELENTE': 5}
+PERIODOS_DIAS = (7, 30, 90)
 
 DOMINIOS = {
     'humor': {'PESSIMO', 'RUIM', 'NEUTRO', 'BOM', 'EXCELENTE'},
@@ -66,3 +71,42 @@ def criar(usuario_id, dados):
              dados.get('alimentacao'), dados.get('exercicio_fisico', False),
              dados.get('interacao'), dados.get('anotacao', '')))
         return serializar(cur.fetchone())
+
+
+def inicio_periodo(dias):
+    """Primeiro dia de uma janela de `dias` que termina hoje."""
+    return date.today() - timedelta(days=dias - 1)
+
+
+def evolucao(cur, usuario_id, dias):
+    """Resumo e media diaria de humor (escala 1-5) dos ultimos `dias`, dentro da transacao do chamador."""
+    cur.execute('''SELECT CRIADO_EM, HUMOR, MINUTOS_SONO, EXERCICIO_FISICO
+        FROM REGISTRO WHERE USUARIO_ID = ? AND CRIADO_EM BETWEEN ? AND ?
+        ORDER BY CRIADO_EM, REGISTRO_ID''', (usuario_id, inicio_periodo(dias), date.today()))
+    linhas = cur.fetchall()
+
+    por_dia = {}
+    for linha in linhas:
+        if linha[1] in ESCALA_HUMOR:
+            por_dia.setdefault(linha[0].isoformat(), []).append(ESCALA_HUMOR[linha[1]])
+    valores = [ESCALA_HUMOR[linha[1]] for linha in linhas if linha[1] in ESCALA_HUMOR]
+    sono = [linha[2] for linha in linhas if linha[2] is not None]
+
+    return {
+        'resumo': {
+            'totalRegistros': len(linhas),
+            'diasRegistrados': len({linha[0] for linha in linhas}),
+            'humorMedio': sum(valores) / len(valores) if valores else None,
+            'minutosSonoMedio': sum(sono) / len(sono) if sono else None,
+            'registrosComExercicio': sum(linha[3] is True or linha[3] == 1 for linha in linhas),
+        },
+        'evolucaoHumor': [{'data': dia, 'valor': sum(v) / len(v), 'quantidade': len(v)}
+                          for dia, v in por_dia.items()],
+    }
+
+
+def evolucao_paciente(usuario_id, dias):
+    if dias not in PERIODOS_DIAS:
+        raise ErroNegocio('dias deve ser 7, 30 ou 90')
+    with transacao() as cur:
+        return {'dias': dias, **evolucao(cur, usuario_id, dias)}

@@ -52,7 +52,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/auth` | `POST login`, `login_mobile`, `verificar_codigo`, `esqueci_senha`, `alterar_senha`, `alterar_senha_logado`, `logout` | público / logado |
 | `/api/usuarios` | `GET/PUT/PATCH /me`, `GET /`, `POST /` (cadastro paciente), `POST /logout` | logado / público |
 | `/api/profissionais` | `GET /` (filtros `nome`, `especialidade`, `tipo_conselho`, `preco_min/max`, `disponibilidade_inicio/fim`, `abordagem`, `modalidade`, `avaliacao_min`), `GET /<id>`, `POST /` (cadastro), `PATCH /me` (descrição, preço, abordagem, modalidade). Cada profissional vem com `especialidade`, `abordagem`, `modalidade`, `avaliacao` (média com 1 casa ou `null`) e `total_avaliacoes` | público / profissional |
-| `/api/registros` | `GET/POST /` (diário, paginação `limite`/`antes`) | só paciente, próprios registros |
+| `/api/registros` | `GET/POST /` (diário, paginação `limite`/`antes`), `GET /evolucao?dias=7\|30\|90` (`resumo` + `evolucaoHumor`, mesmo cálculo e formato do prontuário) | só paciente, próprios registros |
 | `/api/consultas` | `GET /` (inclui `nota_avaliacao`), `POST /` (agendar), `PATCH /<sessao_id>` (horário, link, status), `POST /<sessao_id>/avaliacao` (nota 1–5 e comentário; só paciente, sessão `REALIZADO`, uma vez) | logado |
 | `/api/prontuario` | `GET /<paciente_id>?dias=7\|30\|90` | profissional com sessão não cancelada com o paciente |
 | `/api/encaminhamentos` | `GET /`, `POST /` | profissional |
