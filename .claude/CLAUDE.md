@@ -14,7 +14,7 @@ Everything Claude-related lives in `.claude/`: this file, `architecture.md`, `sk
 - Dev (WSL): `./run.sh` runs gunicorn gthread with one process on 127.0.0.1:8000 and :8001.
 - Dev (Windows, no WSL/Docker): Firebird 4 runs as the `FirebirdServerDefaultInstance` service (SYSDBA/`sysdba`). Run `.venv\Scripts\python app.py` (Flask dev server, threaded, port 5000; gunicorn doesn't run on Windows). In `.env`, `DB_DATABASE` is the absolute path to `database/BANCO.FDB`. Leave `ENDPOINT_URL` commented out until you have real R2 keys: the `<account-id>` placeholder crashes boto3 at import.
 - Docker: `Dockerfile` bundles Firebird 4 + `database/BANCO.FDB`; `docker-entrypoint.sh` starts Firebird, then gunicorn on :8000.
-- Tests: no framework. Assert scripts need Firebird running and undo whatever they create. Run each with `.venv\Scripts\python tests/<file>.py` (`test_rotas.py`, `test_profissionais.py`, `test_pool.py`). Route tests use Flask's `test_client` and set a cookie created with `services.auth_service.gerar_token`. `test_rotas.py` pins status and keys of every route: keep it green on refactors.
+- Tests: no framework. Assert scripts need Firebird running and undo whatever they create. Run each with `.venv\Scripts\python tests/<file>.py` (`test_rotas.py`, `test_signaling.py`, `test_profissionais.py`, `test_pool.py`). Route tests use Flask's `test_client` and set a cookie created with `services.auth_service.gerar_token`. `test_rotas.py` pins status and keys of every route: keep it green on refactors.
 
 ## Architecture
 

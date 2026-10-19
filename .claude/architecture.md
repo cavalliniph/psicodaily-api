@@ -57,7 +57,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/prontuario` | `GET /<paciente_id>?dias=7\|30\|90` | profissional com sessão não cancelada com o paciente |
 | `/api/encaminhamentos` | `GET /`, `POST /` | profissional |
 | `/api/pagamentos` | `POST /cobranca`, `GET /cobranca/<id>`, `GET /financeiro` | paciente (cobrança) / logado |
-| `/ws/signaling?sessao_id=` | WebSocket WebRTC | participantes da sessão |
+| `/ws/signaling?sessao_id=` | WebSocket WebRTC: repassa `offer`/`answer`/`ice-candidate` e emite `peers`, `peer-joined`, `peer-left` | participantes da sessão |
 
 ## Modelo de dados (`database/schema.sql`)
 
@@ -79,7 +79,9 @@ Valores enumerados são `DOMAIN`s com `CHECK`; a validação das rotas espelha e
 
 **Agendamento.** `POST /api/consultas` usa `reservar_participantes`: `SELECT ... WITH LOCK` nos dois usuários em ordem fixa de ID, serializando agendamentos concorrentes sem deadlock, e então checa conflito de horário com sessões não canceladas. `PATCH` muda status (`REALIZADO` só após o fim; `CANCELADO`) separado de horário/link.
 
-**Videochamada.** O WebSocket valida cookie, `sessao_id`, se o usuário é participante, status ≠ `CANCELADO` e janela (abre 15 min antes do início até o fim). Fecha a conexão do banco **antes** de entrar no loop e repassa `offer/answer/ice-candidate` aos outros sockets da sala `sessao:<id>`. Salas vivem num `dict` em memória, por isso há **um único processo**; cada chamada ocupa uma thread.
+**Videochamada.** O WebSocket valida cookie, `sessao_id`, se o usuário é participante, status ≠ `CANCELADO` e janela (abre 15 min antes do início até o fim). Fecha a conexão do banco **antes** de entrar no loop e repassa `offer/answer/ice-candidate` aos outros sockets da sala `sessao:<id>`. Presença: quem entra recebe `{"type": "peers", "participantes": [{id_usuario, nome}]}`; os outros recebem `peer-joined` e, na saída, `peer-left` (mesmos campos, nunca o e-mail). Se o outro participante não está na sala, `consultas_service.avisar_entrada_na_sala` manda um e-mail com o link `FRONT_URL/videochamada/<id>`, uma vez por sessão e por quem entrou (dedupe em memória). Salas vivem num `dict` em memória protegido por um lock, por isso há **um único processo**; cada chamada ocupa uma thread.
+
+No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presença até alguém tratá-los. `src/utils/videoCall.js` espera outro protocolo (`join`/`joined`/`ready` com `call_id`) que o backend nunca implementou e não é importado por nenhuma página.
 
 **Pagamento.** `POST /api/pagamentos/cobranca` lê `VALOR_CENTAVOS` da sessão do paciente e cria cobrança PIX na Arkhé (`ARKHE_BASE_URL`, credenciais `CLIENT_ID`/`CLIENT_SECRET`, via `urllib`), convertendo para reais. `GET /financeiro` agrega saldo, resumo e movimentações da conta Arkhé.
 

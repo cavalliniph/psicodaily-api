@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 from extensions.websocket import sock
 from services.auth_service import decodificar_token
-from services.consultas_service import pode_entrar_na_sala
+from services.consultas_service import avisar_entrada_na_sala, sala_da_sessao
 from services.signaling_service import signaling_service
 
 signaling_bp = Blueprint('signaling', __name__)
@@ -17,12 +17,17 @@ def signaling(ws):
         except (TypeError, ValueError):
             sessao_id = None
 
-        # pode_entrar_na_sala ja devolveu a conexao do banco: a chamada pode durar uma hora.
-        if not id_usuario or not sessao_id or not pode_entrar_na_sala(id_usuario, sessao_id):
+        # sala_da_sessao ja devolveu a conexao do banco: a chamada pode durar uma hora.
+        sala = sala_da_sessao(id_usuario, sessao_id) if id_usuario and sessao_id else None
+        if not sala:
             ws.close()
             return
 
-        signaling_service.handle_connection(ws, f"sessao:{sessao_id}")
+        room = f"sessao:{sessao_id}"
+        avisar_entrada_na_sala(sala, id_usuario, signaling_service.presentes(room))
+        participante = sala['participantes'][id_usuario]
+        # E-mail fica no servidor; a sala so fica sabendo quem e quem.
+        signaling_service.handle_connection(ws, room, {'id_usuario': id_usuario, 'nome': participante['nome']})
     except Exception as e:
         print("ERRO WS:", repr(e))
         ws.close()

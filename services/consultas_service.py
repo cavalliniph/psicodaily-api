@@ -1,9 +1,12 @@
+import os
+import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
 import fdb
 
 from database.db import transacao
+from services import email_service
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 
@@ -239,16 +242,53 @@ def avaliar(paciente_id, papel, sessao_id, dados):
     return {'sessao_id': sessao_id, 'nota': nota}
 
 
-def pode_entrar_na_sala(id_usuario, sessao_id):
-    """A sala abre 15 min antes do inicio e fecha no fim, so para os participantes."""
+def sala_da_sessao(id_usuario, sessao_id):
+    """Dados da sala se o usuario pode entrar agora, senao None.
+
+    A sala abre 15 min antes do inicio e fecha no fim, so para os participantes.
+    """
     with transacao() as cur:
-        cur.execute('''SELECT PACIENTE_ID, PROFISSIONAL_ID, STATUS, DATA_HORA_INICIO, DATA_HORA_FIM
-            FROM SESSAO WHERE SESSAO_ID = ?''', (sessao_id,))
+        cur.execute('''SELECT s.STATUS, s.DATA_HORA_INICIO, s.DATA_HORA_FIM,
+                   pac.ID_USUARIO, pac.NOME, pac.EMAIL, prof.ID_USUARIO, prof.NOME, prof.EMAIL
+            FROM SESSAO s
+            INNER JOIN USUARIO pac ON pac.ID_USUARIO = s.PACIENTE_ID
+            INNER JOIN USUARIO prof ON prof.ID_USUARIO = s.PROFISSIONAL_ID
+            WHERE s.SESSAO_ID = ?''', (sessao_id,))
         sessao = cur.fetchone()
     if not sessao:
-        return False
+        return None
+    status, inicio, fim = sessao[:3]
+    participantes = {linha[0]: {'id_usuario': linha[0], 'nome': linha[1], 'email': linha[2]}
+                     for linha in (sessao[3:6], sessao[6:9])}
     agora = datetime.now()
-    return (id_usuario in sessao[:2]
-            and sessao[2] != 'CANCELADO'
-            and sessao[3] <= agora.replace(second=0, microsecond=0) + timedelta(minutes=15)
-            and sessao[4] >= agora)
+    if (id_usuario not in participantes or status == 'CANCELADO'
+            or inicio > agora.replace(second=0, microsecond=0) + timedelta(minutes=15) or fim < agora):
+        return None
+    return {'sessao_id': sessao_id, 'inicio': inicio, 'participantes': participantes}
+
+
+# ponytail: dedupe em memoria (processo unico); reinicio do servidor pode repetir um aviso
+_avisos_enviados = set()
+_avisos_lock = threading.Lock()
+
+
+def avisar_entrada_na_sala(sala, id_usuario, presentes):
+    """Avisa por e-mail quem ainda nao entrou; uma vez por sessao e por quem entrou."""
+    url_sala = f"{os.getenv('FRONT_URL', 'https://psicodaily-front.vercel.app').rstrip('/')}/videochamada/{sala['sessao_id']}"
+    quem_entrou = sala['participantes'][id_usuario]
+    for destino in sala['participantes'].values():
+        if destino['id_usuario'] == id_usuario or destino['id_usuario'] in presentes:
+            continue
+        chave = (sala['sessao_id'], id_usuario, destino['id_usuario'])
+        with _avisos_lock:
+            if chave in _avisos_enviados:
+                continue
+            _avisos_enviados.add(chave)
+        email_service.enviar_email_async(
+            destino['email'],
+            f"{quem_entrou['nome']} entrou na sala da sua consulta",
+            f"Olá, {destino['nome']}.\n\n"
+            f"{quem_entrou['nome']} já está na sala da consulta de "
+            f"{sala['inicio'].strftime('%d/%m/%Y às %H:%M')} e aguarda você.\n\n"
+            f"Entre pelo link: {url_sala}",
+        )

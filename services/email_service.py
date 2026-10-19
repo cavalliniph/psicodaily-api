@@ -26,6 +26,10 @@ def enviar_email(destinatario, assunto, mensagem, html=None):
             server.send_message(msg)
 
 
+def enviar_email_async(destinatario, assunto, mensagem):
+	threading.Thread(target=enviar_email, args=(destinatario, assunto, mensagem), daemon=True).start()
+
+
 def enviar_email_codigo(email, nome, codigo, finalidade):
 	conteudos = {
 		"ativacao": {
