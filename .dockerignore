@@ -13,9 +13,9 @@ __pycache__
 *.pem
 *.key
 *.exe
-# precisa ir junto com a imagem
-# database/*.FDB
-# database/*.fdb
+# O banco fica no volume do Northflank (/data), nunca na imagem
+**/*.FDB
+**/*.fdb
 **/*.fbk
 usuarios
 tests

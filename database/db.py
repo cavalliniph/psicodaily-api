@@ -79,3 +79,13 @@ def transacao():
     finally:
         cur.close()
         con.close()
+
+
+def banco_responde():
+    """Health check: True se o Firebird responde a uma consulta."""
+    try:
+        with transacao() as cur:
+            cur.execute("SELECT 1 FROM RDB$DATABASE")
+            return cur.fetchone() is not None
+    except Exception:
+        return False

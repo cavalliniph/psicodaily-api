@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 from services.erros import ErroNegocio
+from database.db import banco_responde
 from flask.cli import load_dotenv
 from view.auth import auth_bp
 from view.usuarios import usuarios_bp
@@ -35,6 +36,14 @@ app.register_blueprint(encam_bp)
 app.register_blueprint(pagamentos_bp)
 
 app.config.from_pyfile("config.py")
+
+
+@app.route('/api/saude')
+def saude():
+    # Readiness probe do Northflank: so recebe trafego depois que o banco migrou e responde.
+    if banco_responde():
+        return jsonify({'status': 'ok'})
+    return jsonify({'error': 'Banco indisponivel'}), 503
 
 
 @app.errorhandler(ErroNegocio)

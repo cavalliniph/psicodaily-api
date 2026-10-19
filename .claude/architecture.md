@@ -28,7 +28,7 @@ psicodaily-front (Vercel / Vite :5173)
 | `funcao.py` | Validadores e normalizadores puros (senha, CPF, e-mail, telefone, nome, imagem, conselho, valor, abordagem, modalidade). |
 | `util/usuarios.py` | Decorators `usuario_autenticado` / `profissional_autenticado`. |
 | `services/` | Um `<dominio>_service.py` por blueprint (`auth`, `usuarios`, `registros`, `prontuario`, `profissionais`, `consultas`, `encaminhamentos`, `pagamentos`) com regras e SQL; `email_service` (SMTP + Jinja); `erros.py` (`ErroNegocio`); `upload_service` (R2 via boto3 + Pillow) e `signaling_service` (salas WebRTC). |
-| `database/` | `db.py` (pool e `transacao()`), `schema.sql`, `BANCO.FDB` (banco versionado no repo). |
+| `database/` | `db.py` (pool, `transacao()`, `banco_responde()`), `migrations/` (schema versionado; `0001_inicial.sql` é o baseline de produção), `migrar.py` (aplica as pendentes), `seed.sql` (dados fictícios de dev e CI). O `BANCO.FDB` ainda está no git até o passo 5 da F0, mas não entra mais na imagem. |
 | `templates/` | `email_codigo.html` (Jinja) para códigos de ativação/recuperação. |
 | `tests/` | Scripts com asserts (`test_rotas.py` fixa status e chaves de todas as rotas, `test_profissionais.py`, `test_pool.py`); precisam do Firebird no ar e desfazem o que criam. |
 
@@ -59,7 +59,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/pagamentos` | `POST /cobranca`, `GET /cobranca/<id>`, `GET /financeiro` | paciente (cobrança) / logado |
 | `/ws/signaling?sessao_id=` | WebSocket WebRTC: repassa `offer`/`answer`/`ice-candidate` e emite `peers`, `peer-joined`, `peer-left` | participantes da sessão |
 
-## Modelo de dados (`database/schema.sql`)
+## Modelo de dados (`database/migrations/`)
 
 - `USUARIO`: base de todos (role, CPF, senha bcrypt, `codigo` de 6 dígitos para ativação/recuperação, `ativo`).
 - `PROFISSIONAL`: 1:1 com usuário (`USUARIO_ID`), conselho CRP/CRM, preço, dias de atendimento, `ABORDAGEM` (lista `ABORDAGENS` em `funcao.py`) e `MODALIDADE` (`dm_modalidade`: `ONLINE/PRESENCIAL/AMBAS`). O filtro de modalidade inclui sempre `AMBAS`. Perfil completo, todos opcionais: `FORMACAO`, `ANO_INICIO_ATUACAO` (guarda o ano, não os anos, para não envelhecer), `IDIOMAS` e `AREAS_ATUACAO` (nomes canônicos de `IDIOMAS`/`AREAS_ATUACAO` em `funcao.py`, separados por vírgula; até 8 áreas) e `VIDEO_URL` (só YouTube/Vimeo, gravado já como URL de embed `youtube-nocookie.com/embed/<id>` ou `player.vimeo.com/video/<id>`). Os campos opcionais ficam em `CAMPOS_OPCIONAIS` (`services/profissionais_service.py`): incluir um campo novo é uma linha ali, mais a coluna.
@@ -89,9 +89,18 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 
 ## Execução e deploy
 
-- **Produção no Northflank** (combined service com build da `main`). Toda decisão de infra parte disso. Firebird não é addon do Northflank, então o banco tem que viver num volume Single Read/Write do serviço: 1 instância e alguns segundos fora do ar por deploy. Hoje o `.FDB` ainda vai dentro da imagem e é sobrescrito a cada deploy. A correção (volume, migrations no start, backup e CI) é a F0 em `plans/ultima-sprint.md`.
+- **Produção no Northflank** (combined service com build da `main`). Toda decisão de infra parte disso. Firebird não é addon do Northflank, então o banco tem que viver num volume Single Read/Write do serviço: 1 instância e alguns segundos fora do ar por deploy. A imagem já não leva o `.FDB`. Os passos no painel do Northflank (volume, secret group, snapshot e a cópia do banco atual) estão na F0 em `plans/ultima-sprint.md`. Fazer o merge na `main` antes deles derruba a produção.
 
-- **Docker**: `python:3.14-slim` + Firebird 4 no mesmo container; `docker-entrypoint.sh` sobe o Firebird, define a senha SYSDBA e inicia gunicorn em `:8000`. `TZ=America/Sao_Paulo` (as rotas comparam com `datetime.now()` local).
+- **Docker**: `python:3.14-slim` + Firebird 4 no mesmo container, sem `.FDB` na imagem. O banco fica em `DB_DATABASE` (padrão `/data/BANCO.FDB`, o volume). O `docker-entrypoint.sh`:
+  1. cria o banco, se ele não existir, só com `CRIAR_BANCO=1` (modo embarcado, antes do servidor: o `CREATE DATABASE` remoto recusa a senha inicial da imagem); senão sai com erro;
+  2. sobe o Firebird;
+  3. troca a senha do SYSDBA para `DB_PASSWORD`. O `security4.fdb` mora na imagem, então isso acontece a cada boot;
+  4. faz `gbak` em `/data/backups`, guardando os 5 últimos;
+  5. roda `migrar.py`;
+  6. sobe o gunicorn em `:8000`.
+
+  Se qualquer passo falhar, o container sai antes de receber tráfego. `GET /api/saude` é o readiness probe. `TZ=America/Sao_Paulo` (as rotas comparam com `datetime.now()` local).
+- **CI**: `.github/workflows/ci.yml` (Firebird 4 oficial em serviço, banco do zero com migrations + seed, todos os `tests/`) em todo push e PR. Não faz deploy.
 - **Dev (WSL)**: `run.sh` sobe um gunicorn ouvindo em `127.0.0.1:8000` e `:8001`.
 - **Por que gthread e não gevent**: `fdb` chama `libfbclient` via ctypes, o que bloquearia o loop do gevent.
 
@@ -106,4 +115,5 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 - `dm_role` não inclui `ADMIN`, embora `usuarios.py` e `consultas.py` testem esse papel.
 - `dias_atendimento` é validado no cadastro de profissional, mas não é gravado: não existe modelo de agenda.
 - O estado das salas em memória impede escalar horizontalmente sem um broker (ex.: Redis pub/sub).
-- `BANCO.FDB` está versionado. Alterações de schema precisam ser aplicadas no arquivo e refletidas em `schema.sql`.
+- `BANCO.FDB` continua versionado e público até o passo 5 da F0. Mudança de schema agora é migration nova; não editar o `.FDB` à mão.
+- Charset padrão do banco é `ISO8859_1`: texto com travessão, aspas curvas, emoji ou letras fora do Latin-1 em colunas `VARCHAR` sem `CHARACTER SET UTF8` (ex.: `PROFISSIONAL.FORMACAO`, `AVALIACAO.COMENTARIO`, `USUARIO.NOME`) dá 500. Os BLOBs de texto já são UTF8. Correção planejada logo depois da F0.

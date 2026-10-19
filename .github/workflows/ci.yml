@@ -1,0 +1,68 @@
+# Banco do zero (migrations + seed ficticio) e todos os testes de tests/.
+# Nao faz deploy: o Northflank builda a main. Com a main protegida (merge so com este job verde),
+# so codigo testado chega la. Ver F0 em .claude/plans/ultima-sprint.md.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TZ: America/Sao_Paulo
+      DB_HOST: 127.0.0.1
+      DB_USER: SYSDBA
+      DB_PASSWORD: masterkey
+      # Caminhos dentro do container do Firebird, nao do runner
+      DB_DATABASE: /var/lib/firebird/data/ci.fdb
+      TEST_DB_DIR: /var/lib/firebird/data
+      SECRET_KEY: chave-usada-so-no-ci
+    services:
+      firebird:
+        image: firebirdsql/firebird:4
+        env:
+          FIREBIRD_ROOT_PASSWORD: masterkey
+          TZ: America/Sao_Paulo
+        ports:
+          - 3050:3050
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Cliente do Firebird (fdb usa a libfbclient)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfbclient2
+
+      - run: pip install -r requirements.txt
+
+      - name: Espera o Firebird abrir a porta
+        run: |
+          python - <<'EOF'
+          import socket, time
+          for _ in range(60):
+              try:
+                  socket.create_connection(("127.0.0.1", 3050), 1).close()
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("Firebird nao respondeu em 60s")
+          EOF
+
+      - name: Banco do zero (migrations + seed)
+        run: python database/migrar.py --criar --seed database/seed.sql
+
+      - name: Testes
+        run: |
+          for teste in test_migrar test_rotas test_profissionais test_perfil_profissional test_signaling test_pool; do
+            echo "::group::$teste"
+            python "tests/$teste.py"
+            echo "::endgroup::"
+          done

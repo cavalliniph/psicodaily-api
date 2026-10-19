@@ -46,6 +46,9 @@ amanha = (datetime.now() + timedelta(days=400)).replace(hour=10, minute=0, secon
 criados = {'SESSAO': [], 'REGISTRO': [], 'ENCAMINHAMENTO': []}
 
 try:
+    # saude (readiness probe)
+    assert checar(anonimo.get('/api/saude'), 200, 'status')['status'] == 'ok'
+
     # auth
     checar(anonimo.post('/api/auth/login', json={}), 400, 'error')
     checar(anonimo.post('/api/auth/login', json={'email': 'naoexiste@x.com', 'senha': 'a'}), 404, 'error')

@@ -160,6 +160,10 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 
 ### F0. Banco persistente, migrations e CI no Northflank
 
+**Status (19/10/2026): a parte de código está pronta na branch `f0-migrations`, que não vai para a `main` antes dos passos 2 a 4 da implantação.** O Northflank faz deploy automático da `main`, e a imagem nova não leva mais o `.FDB`: sem o volume preparado, a produção sobe sem banco (o entrypoint se recusa a criar um vazio sem `CRIAR_BANCO=1`, então o deploy falha em vez de apagar dados). Já testado:
+- todos os `tests/` num banco criado do zero (migrations + seed), localmente e contra a imagem oficial `firebirdsql/firebird:4`, como no CI;
+- o container com volume Docker: banco novo; deploy normal com backup e dados preservados; banco de produção sem baseline (recusa subir); baseline local seguido de upload; migration nova; migration quebrada (não sobe e não deixa nada pela metade); rollback para a imagem anterior.
+
 **Por que agora:** o `Dockerfile` copia o `database/BANCO.FDB` do repositório para a imagem, e o Firebird abre esse arquivo. No Northflank o disco do container é efêmero: a cada deploy, o banco de produção volta a ser a cópia do git, e tudo o que os usuários gravaram desde o deploy anterior some. No caminho inverso, dados pessoais do banco de desenvolvimento vão para o repo público (item 0.2). Cada feature nova com tabela ou coluna piora as duas coisas.
 
 **Restrições do Northflank que definem o desenho**
@@ -174,10 +178,10 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 |---|---|
 | Volume | `psicodaily-db`, Single Read/Write, montado em `/data` no serviço da API. Não em `/app/database`, para não esconder arquivos da imagem. `DB_DATABASE=/data/BANCO.FDB`; o entrypoint faz `chown -R firebird:firebird /data` |
 | Imagem | Só código: `database/*.FDB` entra no `.dockerignore` e sai do git (`git rm --cached`). Sai também o `chown` do `.FDB` no `Dockerfile` |
-| Primeiro boot | Se `/data/BANCO.FDB` não existe, o entrypoint cria um banco vazio (`CREATE DATABASE` via `isql-fb`) e as migrations montam o schema |
+| Primeiro boot | Se `/data/BANCO.FDB` não existe e `CRIAR_BANCO=1`, o entrypoint cria um banco vazio em **modo embarcado, antes de subir o servidor**: o `CREATE DATABASE` remoto recusa a senha inicial da imagem. Sem a variável, o container sai com erro, para um volume esquecido não virar banco vazio em produção |
 | Migrations | `database/migrations/NNNN_descricao.sql`, aplicadas em ordem por `database/migrar.py` (~50 linhas, com o `fdb` que já está instalado). Controle na tabela `SCHEMA_MIGRATION (VERSAO, NOME, APLICADA_EM)`. Cada arquivo roda numa transação só: se falhar, nada fica pela metade |
-| Baseline | `0001_inicial.sql`, gerado do banco atual com `isql-fb -x`. O `schema.sql` não roda do zero: tem comentário `//`, `SESSAO.CRIADO_EM` duplicado e FKs para `USUARIO(USUARIO_ID)`. No banco de produção, o `0001` só é registrado como aplicado. O `schema.sql` sai do repo depois disso |
-| Entrypoint | 1. sobe o Firebird → 2. `gbak` para `/data/backups/antes-<sha>.fbk` (guarda os 5 últimos) → 3. `migrar.py` → 4. `exec gunicorn`, só se 2 e 3 terminarem com exit 0 |
+| Baseline | `0001_inicial.sql`, extraído com `isql -x` do `.FDB` da `main` em `43fb231`, que é o que a produção roda. Recriado do zero, o DDL sai idêntico (comparado com `diff`). O `schema.sql` saiu do repo: estava desatualizado (faltava a tabela `CID`, listava uma `CONVERSA_PARTICIPANTE` que não existe) e não rodava do zero. No banco de produção, o `0001` só é registrado como aplicado (`--baseline 1`) |
+| Entrypoint | 1. cria o banco, se for um ambiente novo → 2. sobe o Firebird → 3. troca a senha do SYSDBA para `DB_PASSWORD` (o `security4.fdb` mora na imagem, então é a cada boot) → 4. `gbak` para `/data/backups/antes-<data-hora>.fbk` (guarda os 5 últimos) → 5. `migrar.py` → 6. `exec gunicorn`. Qualquer erro encerra o container |
 | Backup | Snapshot diário do volume, com 14 dias de retenção (backup schedule do Northflank), mais o `gbak` de antes de cada deploy. O `gbak` é consistente; o snapshot pega o arquivo com o Firebird rodando |
 | Health check | `GET /api/saude` (200 se `SELECT 1` responde) como readiness probe, para o Northflank só mandar tráfego depois de migrar e subir |
 | Segredos | `DB_PASSWORD`, `SECRET_KEY` e as credenciais da Arkhé, do R2 e do SMTP num secret group do projeto. O entrypoint passa a usar `DB_PASSWORD` no lugar do `'sysdba'` fixo, o que adianta o S14 |
@@ -188,6 +192,8 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 2. No mesmo deploy, só mudanças aditivas: coluna `NULL` ou com `DEFAULT`, tabela nova, índice. O código da versão anterior continua funcionando com o schema novo, então voltar o deploy é seguro.
 3. Mudança destrutiva em dois deploys (expand/contract): o deploy 1 cria o novo e copia os dados; o deploy 2, depois de confirmado, remove o antigo.
 4. DDL e DML em arquivos separados: no Firebird, uma coluna criada só pode ser usada por `UPDATE` depois do commit.
+5. `ADD COLUNA ... DEFAULT x` **não preenche as linhas que já existem** (elas leem `NULL`); se precisar, faça um `UPDATE` noutra migration.
+6. Toda coluna de texto nova leva `CHARACTER SET UTF8`, porque o padrão do banco é `ISO8859_1` (ver F0.1). Trocar o charset de uma coluna existente com `ALTER COLUMN ... TYPE` é **ignorado em silêncio** pelo Firebird.
 
 **CI/CD**
 - **GitHub Actions** (`.github/workflows/ci.yml`), em todo PR e push na `main`: serviço Firebird 4 (`firebirdsql/firebird`), `apt install libfbclient2`, `pip install -r requirements.txt`, banco vazio → `migrar.py` do zero → `seed.sql` → os scripts de `tests/`. Isso pega SQL quebrado e regressão antes do deploy.
@@ -196,16 +202,29 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 - **Restauração:** `gbak -c` a partir de `/data/backups` via `northflank exec service`, ou clonar o volume a partir de um snapshot e anexá-lo ao serviço.
 
 **Implantação (uma vez)**
-1. Local: gerar o `0001` e escrever `migrar.py`, `seed.sql`, `GET /api/saude` e o entrypoint novo. Testar subindo do zero no Docker local, com `docker run -v` montando `/data`.
+1. ~~Local: `0001`, `migrar.py`, `seed.sql`, `GET /api/saude`, entrypoint e CI.~~ Feito na branch `f0-migrations`.
 2. Northflank: criar o volume e o secret group, e agendar o snapshot.
-3. Copiar o banco de produção atual para o volume: `northflank download service file --remotePath /app/database/BANCO.FDB` do container em execução → `northflank upload service file --remotePath /data/BANCO.FDB` (ou `gbak` via `exec`). Registrar o `0001` como aplicado.
-4. Deploy da imagem nova, sem `.FDB`, apontando para `/data`. Conferir login, busca e uma consulta.
+3. Numa janela de pouco uso, copiar o banco atual para o volume: `northflank download service file --remotePath /app/database/BANCO.FDB` do container em execução → `python database/migrar.py --baseline 1` **localmente**, com `DB_DATABASE` apontando para o arquivo baixado (a senha inicial do container não serve para o `fdb`, só para o `isql` trocá-la) → `northflank upload service file --remotePath /data/BANCO.FDB`. O que for gravado entre o download e o deploy se perde, por isso a janela.
+4. Variáveis no serviço: `DB_DATABASE=/data/BANCO.FDB`, `DB_HOST=127.0.0.1` e `DB_PASSWORD` forte (sem aspas simples), pelo secret group. Readiness probe HTTP em `/api/saude`, porta 8000. Merge da `f0-migrations` na `main` → deploy. Conferir no log "Backup antes das migrations" e "schema em dia", depois login, busca e uma consulta.
 5. `git rm --cached database/BANCO.FDB`. Isso resolve o item 0.2 daqui em diante; o histórico continua com o arquivo até rodar `git filter-repo` ou tornar o repo privado.
 6. Workflow do Actions e proteção da `main`.
 7. Atualizar `CLAUDE.md` e `architecture.md`: comandos de dev, deploy e "Pontos de atenção".
 
-**Pronto quando:** um deploy da `main` com uma migration nova mantém os dados de produção; o CI aplica as migrations do zero e os testes passam; existem um snapshot e um `gbak` recentes.
+**Pronto quando:** um deploy da `main` com uma migration nova mantém os dados de produção; o CI aplica as migrations do zero e os testes passam; existem um snapshot e um `gbak` recentes. Teste final recomendado: logo depois do passo 4, fazer um deploy vazio (redeploy) e conferir que os dados continuam lá.
 Esforço: M (2 a 4 dias), quase tudo na implantação única.
+
+### F0.1. Texto livre em UTF8 (logo depois da F0)
+
+Achado ao montar o baseline: o banco tem `DEFAULT CHARACTER SET ISO8859_1`, e toda coluna `VARCHAR` sem charset explícito herda isso. Travessão (–), aspas curvas (“ ”), que o teclado do celular e o Word inserem sozinhos, emoji e letras fora do Latin-1 dão **500** (`Cannot transliterate character between character sets`). Testado em `PATCH /api/profissionais/me` com `formacao`: acento passa; travessão, aspas curvas e emoji quebram. Os BLOBs de texto (descrição, anotação, motivo) já são UTF8.
+
+Colunas de texto livre afetadas: `PROFISSIONAL.FORMACAO`, `AVALIACAO.COMENTARIO`, `USUARIO.NOME` (o `validar_nome` aceita letras não latinas). As de vocabulário fixo (abordagem, idiomas, conselho) não precisam mudar.
+
+Receita, já que o `ALTER ... CHARACTER SET` é ignorado; uma migration por passo:
+1. `ALTER TABLE X ADD COL_NOVA VARCHAR(n) CHARACTER SET UTF8`
+2. `UPDATE X SET COL_NOVA = COL`
+3. `ALTER TABLE X DROP COL` e `ALTER TABLE X ALTER COLUMN COL_NOVA TO COL`
+
+O nome continua o mesmo, então o código não muda; as rotas leem colunas pelo nome, nunca pela posição. Fazer no mesmo deploy só porque nenhum código depende da coluna antiga; restrições `NOT NULL` voltam no passo 3. Teste: gravar e ler `formacao` e `comentario` com “ ” – e emoji.
 
 | ID | Fundação | O que é | Desbloqueia |
 |---|---|---|---|
@@ -218,8 +237,8 @@ Esforço: M (2 a 4 dias), quase tudo na implantação única.
 | F7 | **Jobs periódicos** | Thread daemon iniciada no `app.py` que roda a cada minuto (lembretes, lista de espera, reconciliação de pagamento). Cabe no processo único. Um cron job do Northflank não montaria o volume do banco (F0), então teria que chamar uma rota interna da API em vez de abrir o `.FDB` | 6, 30 |
 | F8 | **Papel ADMIN** | `dm_role` não tem `ADMIN`, mas `usuarios.py` e `consultas.py` já checam esse papel. `ALTER DOMAIN` + decorator `admin_autenticado` | 25, S9 |
 
-Schema: até a F0 ficar pronta, toda mudança vai no `schema.sql` **e** é aplicada no `BANCO.FDB`. Depois dela, cada mudança é um arquivo novo em `database/migrations/`.
-Corrigir numa migration logo depois do baseline: as FKs de `CONVERSA_*` e `ENCAMINHAMENTO` apontam para `USUARIO(USUARIO_ID)`, mas a coluna é `ID_USUARIO`; as PKs de `CONVERSA*` não são `IDENTITY`; o default de `SESSAO.STATUS` é `'AGENDADA'`, que o domínio rejeita.
+Schema: cada mudança é um arquivo novo em `database/migrations/` (regras na F0).
+Pendências de schema conferidas no banco real: o default de `SESSAO.STATUS` é `'AGENDADA'`, que o domínio rejeita (hoje inofensivo, porque o `INSERT` sempre informa o status). `CONVERSA` e `CONVERSA_MENSAGEM` têm PK sem `IDENTITY`, e `CONVERSA_PARTICIPANTE` não existe. Corrigir junto com a feature 18 (chat).
 
 ---
 
@@ -285,7 +304,7 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 ### Sequência sugerida
 
 1. Fase 0 → Fase 1 (refatoração). A Fase 2 (segurança) ficou para o final, a pedido do time
-2. Onda A: 28, 14 e 3 (feitas) → **F0 (banco persistente, migrations e CI no Northflank)** → 7 (com F1), 8, F5+20, F8+25
+2. Onda A: 28, 14 e 3 (feitas) → **F0 (banco persistente, migrations e CI no Northflank)** → F0.1 (texto em UTF8) → 7 (com F1), 8, F5+20, F8+25
 3. F1 agenda → 6, 29 completo; F2 → 24, 32, 17; F3 → 4/27
 4. 5 → 2; 30 → 13 → 12/31; 18 → 19
 5. 16/21/22 e 11 por último: mais caros e com mais decisões em aberto
