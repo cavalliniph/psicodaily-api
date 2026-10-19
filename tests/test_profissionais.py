@@ -7,7 +7,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import app
 from database.db import get_connection
-from funcao import gerar_token
+from services.auth_service import gerar_token
 
 PROFISSIONAL, PACIENTE, OUTRO_PACIENTE = 22, 23, 25
 

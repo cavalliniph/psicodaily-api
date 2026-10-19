@@ -1,5 +1,6 @@
 import os
 import queue
+from contextlib import contextmanager
 from dotenv import load_dotenv
 import fdb
 
@@ -65,3 +66,16 @@ def get_connection():
             return ConexaoDoPool(con)
         except Exception:
             _fechar(con)
+
+
+@contextmanager
+def transacao():
+    # Commit so se o bloco terminar sem excecao; close() desfaz o resto e devolve ao pool.
+    con = get_connection()
+    cur = con.cursor()
+    try:
+        yield cur
+        con.commit()
+    finally:
+        cur.close()
+        con.close()

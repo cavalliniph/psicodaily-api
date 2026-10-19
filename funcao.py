@@ -1,35 +1,8 @@
 from decimal import Decimal, InvalidOperation
 import json
 import os
-import secrets
-import threading
 import unicodedata
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-import smtplib
-from flask import current_app, jsonify, request
-from flask_bcrypt import check_password_hash, generate_password_hash
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-import jwt
 import re
-from services.upload_service import upload_service
-
-def gerar_token(payload):
-	try:
-		token = jwt.encode(
-            payload,
-			current_app.config.get("SECRET_KEY"),
-			algorithm='HS256'
-        )
-		return token
-	except Exception as e:
-		print(f"erro ao criar token: {str(e)}")
-
-def senha_correta(senha_hash, senha):
-	return check_password_hash(senha_hash, senha)
-
-def criar_hash_senha(senha):
-	return generate_password_hash(senha)
 
 def validar_senha(senha: str):
     if not senha:
@@ -53,24 +26,6 @@ def validar_senha(senha: str):
     if not (maiuscula and minuscula and numero and especial):
         return False
     return True
-
-def enviar_email(destinatario, assunto, mensagem, html=None):
-        user = "psicodaily.contato@gmail.com"
-        senha = "hmdk zazs yrxn gylf"
-
-        if html:
-            msg = MIMEMultipart("alternative")
-            msg.attach(MIMEText(mensagem, "plain", "utf-8"))
-            msg.attach(MIMEText(html, "html", "utf-8"))
-        else:
-            msg = MIMEText(mensagem, "plain", "utf-8")
-        msg['Subject'] = assunto
-        msg['From'] = user
-        msg['To'] = destinatario
-
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(user, senha)
-            server.send_message(msg)
 
 def validar_cpf(cpf):
 	cpf = ''.join(filter(str.isdigit, cpf))
@@ -133,10 +88,6 @@ TIPOS_IMAGEM_PERMITIDOS = {"image/jpeg", "image/jpg"}
 EXTENSOES_IMAGEM_PERMITIDAS = {".jpg", ".jpeg"}
 
 
-def resposta_erro(mensagem, status=400):
-	return jsonify({ "error": mensagem }), status
-
-
 def obter_campo(formulario, *nomes):
 	for nome in nomes:
 		valor = formulario.get(nome)
@@ -180,127 +131,6 @@ def validar_imagem_usuario(imagem):
 	tipo = (imagem.content_type or "").lower()
 
 	return extensao in EXTENSOES_IMAGEM_PERMITIDAS and tipo in TIPOS_IMAGEM_PERMITIDOS
-
-
-def salvar_imagem_usuario(imagem, id_usuario):
-	if not imagem or not imagem.filename:
-		return
-
-	upload_service.upload_file(imagem.stream, id_usuario)
-
-
-def enviar_email_codigo(email, nome, codigo, finalidade):
-	conteudos = {
-		"ativacao": {
-			"assunto": "Ative sua conta no PSICOdaily",
-			"mensagem": "Use o código abaixo para confirmar seu e-mail e ativar sua conta.",
-			"mensagem_secundaria": "Digite este código na tela de ativação. Ele pode ser usado uma única vez.",
-		},
-		"recuperacao": {
-			"assunto": "Código para redefinir sua senha",
-			"mensagem": "Recebemos uma solicitação para redefinir a senha da sua conta.",
-			"mensagem_secundaria": "Se você não solicitou a redefinição, ignore este e-mail. Sua senha atual continuará válida.",
-		},
-	}
-	conteudo = conteudos.get(finalidade)
-	if conteudo is None:
-		raise ValueError("Finalidade de e-mail inválida")
-
-	diretorio_templates = os.path.join(os.path.dirname(__file__), "templates")
-	ambiente = Environment(
-		loader=FileSystemLoader(diretorio_templates),
-		autoescape=select_autoescape(["html"]),
-	)
-	html = ambiente.get_template("email_codigo.html").render(
-		nome=nome or "",
-		codigo=codigo,
-		mensagem=conteudo["mensagem"],
-		mensagem_secundaria=conteudo["mensagem_secundaria"],
-	)
-
-	texto = f"{conteudo['mensagem']}\n\nCódigo: {codigo}\n\n{conteudo['mensagem_secundaria']}"
-	enviar_email(email, conteudo["assunto"], texto, html)
-
-
-def enviar_email_codigo_async(email, nome, codigo, finalidade):
-	threading.Thread(
-		target=enviar_email_codigo,
-		args=(email, nome, codigo, finalidade),
-		daemon=True,
-	).start()
-
-
-def enviar_email_ativacao(email, codigo, nome=""):
-	enviar_email_codigo_async(email, nome, codigo, "ativacao")
-
-
-def criar_usuario_base(cur, formulario, usuario_role, exigir_confirmacao_senha=False):
-	imagem = request.files.get('imagem')
-	email = obter_campo(formulario, 'email').lower()
-	nome = obter_campo(formulario, 'nome')
-	telefone = obter_campo(formulario, 'telefone')
-	senha = obter_campo(formulario, 'senha')
-	confirmar_senha = obter_campo(formulario, 'confirmar_senha', 'confirmarSenha')
-	cpf = somente_digitos(obter_campo(formulario, 'cpf'))
-
-	if not nome or not email or not telefone or not senha or not cpf:
-		return None, resposta_erro("Todos os campos de usuario sao obrigatorios")
-
-	if not validar_nome(nome):
-		return None, resposta_erro("Nome invalido")
-
-	if not validar_email(email):
-		return None, resposta_erro("Email invalido")
-
-	if not validar_cpf(cpf):
-		return None, resposta_erro("CPF invalido")
-
-	if not validar_telefone(telefone):
-		return None, resposta_erro("Telefone invalido")
-
-	if not validar_senha(senha):
-		return None, resposta_erro("Senha nao atende aos requisitos")
-
-	if exigir_confirmacao_senha and not confirmar_senha:
-		return None, resposta_erro("Confirmacao de senha e obrigatoria")
-
-	if exigir_confirmacao_senha and senha != confirmar_senha:
-		return None, resposta_erro("As senhas nao sao iguais")
-
-	if not validar_imagem_usuario(imagem):
-		return None, resposta_erro("Imagem deve ser um arquivo JPG ou JPEG")
-
-	cur.execute("SELECT id_usuario FROM usuario WHERE email = ?", (email,))
-
-	if cur.fetchone():
-		return None, resposta_erro("Usuario ja cadastrado")
-
-	cur.execute("SELECT id_usuario FROM usuario WHERE cpf = ?", (cpf,))
-
-	if cur.fetchone():
-		return None, resposta_erro("CPF ja cadastrado")
-
-	senha_hash = criar_hash_senha(senha)
-	codigo = f"{secrets.randbelow(1000000):06d}"
-
-	cur.execute("""INSERT INTO usuario (nome, email, telefone, senha, cpf, codigo, usuario_role)
-					  VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id_usuario""",
-			 (nome, email, telefone, senha_hash, cpf, codigo, usuario_role))
-
-	usuario_criado = cur.fetchone()
-
-	if usuario_criado is None:
-		raise RuntimeError("Banco nao retornou o usuario criado")
-
-	id_usuario = usuario_criado[0]
-	salvar_imagem_usuario(imagem, id_usuario)
-
-	return {
-		"id_usuario": id_usuario,
-		"email": email,
-		"codigo": codigo,
-		"nome": nome,
-	}, None
 
 
 def obter_dias_atendimento(formulario):
@@ -405,6 +235,3 @@ def normalizar_conselho(valor, conselho_tipo):
 			return texto
 
 	return None
-
-def decodificar_token(token):
-	return jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])

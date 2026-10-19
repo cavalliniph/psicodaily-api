@@ -9,7 +9,7 @@ psicodaily-front (Vercel / Vite :5173)
         │  HTTPS + cookie access_token (JWT)      WebSocket /ws/signaling
         ▼                                          ▼
 ┌──────────────────── gunicorn gthread (1 processo, 32 threads) ───────────────────┐
-│ app.py ── Blueprints em view/*.py ── helpers funcao.py / util/                    │
+│ app.py ── Blueprints em view/*.py ── services/*_service.py ── funcao.py (puro)    │
 │                    │                    │                     │                   │
 │          database/db.py (pool)   services/upload_service   services/signaling_*   │
 └────────────────────┼────────────────────┼─────────────────────┼───────────────────┘
@@ -22,18 +22,28 @@ psicodaily-front (Vercel / Vite :5173)
 
 | Pasta / arquivo | Papel |
 |---|---|
-| `app.py` | Cria o app, registra blueprints, `sock` (flask-sock) e CORS (origens fixas). |
+| `app.py` | Cria o app, registra blueprints, `sock` (flask-sock), CORS (origens fixas) e os `errorhandler` (`ErroNegocio` → `{'error'}`; exceção inesperada → log + 500). |
 | `config.py` | `SECRET_KEY` do `.env`. |
-| `view/` | Rotas HTTP/WS, uma blueprint por domínio. SQL fica aqui, direto na rota. |
-| `funcao.py` | Helpers compartilhados: JWT, bcrypt, validação (senha, CPF, e-mail, telefone, nome, imagem), envio de e-mail, `criar_usuario_base`, normalizadores de profissional. |
+| `view/` | Rotas HTTP/WS, uma blueprint por domínio. Só leem o `request`, chamam o service e montam a resposta. |
+| `funcao.py` | Validadores e normalizadores puros (senha, CPF, e-mail, telefone, nome, imagem, conselho, valor, abordagem, modalidade). |
 | `util/usuarios.py` | Decorators `usuario_autenticado` / `profissional_autenticado`. |
-| `util/datas.py` | `parsear_data` (ISO → datetime sem segundos). |
-| `services/` | `upload_service` (R2 via boto3 + Pillow) e `signaling_service` (salas WebRTC). |
-| `database/` | `db.py` (pool), `schema.sql`, `BANCO.FDB` (banco versionado no repo). |
+| `services/` | Um `<dominio>_service.py` por blueprint (`auth`, `usuarios`, `registros`, `prontuario`, `profissionais`, `consultas`, `encaminhamentos`, `pagamentos`) com regras e SQL; `email_service` (SMTP + Jinja); `erros.py` (`ErroNegocio`); `upload_service` (R2 via boto3 + Pillow) e `signaling_service` (salas WebRTC). |
+| `database/` | `db.py` (pool e `transacao()`), `schema.sql`, `BANCO.FDB` (banco versionado no repo). |
 | `templates/` | `email_codigo.html` (Jinja) para códigos de ativação/recuperação. |
-| `tests/` | Scripts com asserts (`test_pool.py`, `test_profissionais.py`); precisam do Firebird no ar e desfazem o que criam. |
+| `tests/` | Scripts com asserts (`test_rotas.py` fixa status e chaves de todas as rotas, `test_profissionais.py`, `test_pool.py`); precisam do Firebird no ar e desfazem o que criam. |
 
-Não há ORM, camada de serviço para regras de negócio nem modelos: cada rota abre conexão, executa SQL parametrizado (`?`), faz `commit` e fecha.
+Não há ORM nem modelos: SQL parametrizado (`?`) direto no Firebird.
+
+### Decisão: regras de negócio em `services/` (19/10/2026)
+
+Antes, cada rota de `view/` abria conexão, validava, executava SQL e montava a resposta, e `funcao.py` misturava validadores puros com I/O (e-mail, upload, `criar_usuario_base` lendo `request`). Isso duplicava código (`login` × `login_mobile`, decode manual de token em `consultas`/`pagamentos`), fazia `view/prontuario.py` importar de `view/registros.py` e impedia reaproveitar regras fora do HTTP (WebSocket, jobs, webhook do WhatsApp, ferramentas do agente de IA). Por isso as camadas são:
+
+- **`view/`**: só HTTP. Lê `request`, aplica o decorator de auth, chama o service e monta `jsonify`/headers. Não importa `get_connection` nem tem SQL.
+- **`services/<dominio>_service.py`**: regras, SQL, transação e APIs externas. Funções simples (sem classes) que recebem valores já parseados e devolvem `dict`/`list`. **Não importa de `flask`** (`flask_bcrypt` pode). Erro de regra sai como `ErroNegocio(mensagem, status, **extra)` (`services/erros.py`), convertido em `{'error': msg, **extra}` por um `errorhandler` único no `app.py`.
+- **`database/db.py`**: `transacao()` (context manager) faz commit no sucesso e devolve a conexão ao pool em qualquer caso.
+- **`funcao.py`**: só validadores e normalizadores puros.
+
+Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não três. Migração concluída em 19/10/2026 (`plans/ultima-sprint.md`, fase 1), sem mudança de comportamento além do texto dos 500 e do 401 sem cookie em `consultas`/`pagamentos`, que agora vêm dos decorators.
 
 ## Rotas
 
@@ -56,10 +66,10 @@ Não há ORM, camada de serviço para regras de negócio nem modelos: cada rota 
 - `REGISTRO`: diário do paciente (humor, sono, alimentação, exercício, anotação BLOB).
 - `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`.
 - `SESSAO`: consulta paciente × profissional; `STATUS` `AGENDADO/CONFIRMADO/REALIZADO/CANCELADO`, `VALOR_CENTAVOS` inteiro, FK opcional para encaminhamento e conversa.
-- `AVALIACAO`: nota 1–5 e comentário do paciente por sessão (`UQ_AVALIACAO_SESSAO`); a busca junta a média por profissional numa tabela derivada (`ORIGEM_PROFISSIONAL` em `view/profissionais.py`).
+- `AVALIACAO`: nota 1–5 e comentário do paciente por sessão (`UQ_AVALIACAO_SESSAO`); a busca junta a média por profissional numa tabela derivada (`ORIGEM_PROFISSIONAL` em `services/profissionais_service.py`).
 - `CONVERSA`, `CONVERSA_PARTICIPANTE`, `CONVERSA_MENSAGEM`: existem no schema, sem rotas ainda.
 
-Valores enumerados são `DOMAIN`s com `CHECK`; a validação das rotas espelha esses domínios (ex.: `DOMINIOS` em `view/registros.py`).
+Valores enumerados são `DOMAIN`s com `CHECK`; a validação das rotas espelha esses domínios (ex.: `DOMINIOS` em `services/registros_service.py`).
 
 ## Fluxos principais
 
@@ -83,7 +93,13 @@ Valores enumerados são `DOMAIN`s com `CHECK`; a validação das rotas espelha e
 
 ## Pontos de atenção
 
-- Senha SMTP do Gmail hard-coded em `funcao.py` (`enviar_email`). Deveria vir do `.env`.
-- O JWT não tem `exp`: o token vale até a troca do `SECRET_KEY`.
+- Checkup de segurança de 19/10/2026 em `plans/ultima-sprint.md` (seção 2, achados S1–S23). Os mais graves:
+  - Repo **público** com a senha SMTP do Gmail hard-coded em `services/email_service.py` (`enviar_email`) e com o `BANCO.FDB`, que tem dados reais.
+  - Código de ativação/recuperação sem expiração nem limite de tentativas: força bruta toma qualquer conta pelo e-mail.
+  - O JWT não tem `exp`: o token vale até a troca do `SECRET_KEY`.
+  - `GET /api/encaminhamentos` lista os encaminhamentos de todos os profissionais.
+  - WebSocket sem checagem de `Origin` (cookie `SameSite=None`).
+- `dm_role` não inclui `ADMIN`, embora `usuarios.py` e `consultas.py` testem esse papel.
+- `dias_atendimento` é validado no cadastro de profissional, mas não é gravado: não existe modelo de agenda.
 - O estado das salas em memória impede escalar horizontalmente sem um broker (ex.: Redis pub/sub).
 - `BANCO.FDB` está versionado. Alterações de schema precisam ser aplicadas no arquivo e refletidas em `schema.sql`.

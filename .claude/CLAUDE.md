@@ -14,23 +14,24 @@ Everything Claude-related lives in `.claude/`: this file, `architecture.md`, `sk
 - Dev (WSL): `./run.sh` runs gunicorn gthread with one process on 127.0.0.1:8000 and :8001.
 - Dev (Windows, no WSL/Docker): Firebird 4 runs as the `FirebirdServerDefaultInstance` service (SYSDBA/`sysdba`). Run `.venv\Scripts\python app.py` (Flask dev server, threaded, port 5000; gunicorn doesn't run on Windows). In `.env`, `DB_DATABASE` is the absolute path to `database/BANCO.FDB`. Leave `ENDPOINT_URL` commented out until you have real R2 keys: the `<account-id>` placeholder crashes boto3 at import.
 - Docker: `Dockerfile` bundles Firebird 4 + `database/BANCO.FDB`; `docker-entrypoint.sh` starts Firebird, then gunicorn on :8000.
-- Tests: no framework. Assert scripts need Firebird running and undo whatever they create. Run each with `.venv\Scripts\python tests/<file>.py` (`test_pool.py`, `test_profissionais.py`). Route tests use Flask's `test_client` and set a cookie created with `gerar_token`.
+- Tests: no framework. Assert scripts need Firebird running and undo whatever they create. Run each with `.venv\Scripts\python tests/<file>.py` (`test_rotas.py`, `test_profissionais.py`, `test_pool.py`). Route tests use Flask's `test_client` and set a cookie created with `services.auth_service.gerar_token`. `test_rotas.py` pins status and keys of every route: keep it green on refactors.
 
 ## Architecture
 
 Full map (routes, data model, flows, known risks) in [architecture.md](architecture.md). Read it before touching cross-cutting code, and update it when routes, tables or infra change.
 
+- **Layers (decided 2026-10-19)**: `view/` is HTTP only: it parses the request, calls a service and returns `jsonify`. No SQL and no `get_connection` there. Business rules, SQL and external APIs go in `services/<dominio>_service.py` as plain functions that never import from `flask` (`flask_bcrypt` is fine). Rule violations raise `ErroNegocio(msg, status, **extra)`, which `app.py` turns into `{'error': msg, **extra}`. Unexpected exceptions are logged and become a generic 500, so routes have no try/except. Rationale in architecture.md.
 - `app.py` registers one Blueprint per domain from `view/*.py` (auth, usuarios, registros, prontuario, profissionais, consultas, encaminhamentos, pagamentos, signaling). Routes live under `/api/...`.
-- **Database**: Firebird via `fdb`, raw SQL only (no ORM). Schema and CHECK domains are in `database/schema.sql`. Routes call `get_connection()` from `database/db.py` and must call `con.close()` in `finally`. `close()` rolls back anything uncommitted and returns the connection to a LIFO pool (max 10). So **commit explicitly** before close.
-- **Auth**: JWT (HS256, `SECRET_KEY`) in the `access_token` cookie. Decorators in `util/usuarios.py`: `usuario_autenticado` and `profissional_autenticado` pass the decoded payload (`id_usuario`, `usuario_role`) as the first argument. Role checks inside routes read `usuario_role`.
-- `funcao.py` holds the shared helpers: tokens, password hashing/validation, CPF/email/phone validation, email sending (Jinja template `templates/email_codigo.html`), `criar_usuario_base`, and professional-specific normalizers. Check it before writing a new validator.
+- **Database**: Firebird via `fdb`, raw SQL only (no ORM). Schema and CHECK domains are in `database/schema.sql`. Services use `with transacao() as cur:` from `database/db.py`. It commits when the block ends without an exception; otherwise `close()` rolls back and returns the connection to a LIFO pool (max 10). Raw `get_connection()` callers (tests) must commit explicitly and `close()` in `finally`.
+- **Auth**: JWT (HS256, `SECRET_KEY`) in the `access_token` cookie, created and decoded in `services/auth_service.py`. Decorators in `util/usuarios.py`: `usuario_autenticado` and `profissional_autenticado` pass the decoded payload (`id_usuario`, `usuario_role`) as the first argument. Role checks inside routes read `usuario_role`.
+- `funcao.py` holds only pure validators/normalizers (password, CPF, email, phone, name, image, conselho, price, abordagem/modalidade). Check it before writing a new one. Email sending (Jinja template `templates/email_codigo.html`) is `services/email_service.py`; `criar_usuario_base` is `services/usuarios_service.py`.
 - **Video calls**: WebSocket `/ws/signaling?sessao_id=` (flask-sock), which relays WebRTC offer/answer/ICE. Rooms live **in memory** in `services/signaling_service.py`, so the server must run as **one process** (gthread, 32 threads). Don't add workers or switch to gevent: `fdb` uses ctypes and would block the event loop.
-- **Payments**: `view/pagamentos.py` proxies the external Arkhé PIX API (`ARKHE_BASE_URL`, `CLIENT_ID`/`CLIENT_SECRET`) using `urllib`.
+- **Payments**: `services/pagamentos_service.py` proxies the external Arkhé PIX API (`ARKHE_BASE_URL`, `CLIENT_ID`/`CLIENT_SECRET`) using `urllib`.
 - **Profile photos**: Cloudflare R2 via boto3 + Pillow (`services/upload_service.py`; env `ENDPOINT_URL`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `R2_PUBLIC_URL`).
 - CORS origins are hard-coded in `app.py`; add new frontend hosts there.
 
 ## Conventions
 
-- Error responses: `jsonify({'error': msg}), status`.
-- Validate request bodies against allowed fields and domain values (see `view/registros.py`) and reject unknown fields. Never trust `usuario_id` from the body; take it from the token.
+- Error responses: `raise ErroNegocio(msg, status)` in services; a view may return `jsonify({'error': msg}), status` for request-shape errors.
+- Validate request bodies against allowed fields and domain values (see `services/registros_service.py`) and reject unknown fields. Never trust `usuario_id` from the body; take it from the token.
 - Commit messages: Conventional Commits in Portuguese (`feat: ...`, `fix: ...`).

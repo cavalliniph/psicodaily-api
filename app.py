@@ -1,4 +1,6 @@
-from flask import Flask
+from flask import Flask, jsonify
+from werkzeug.exceptions import HTTPException
+from services.erros import ErroNegocio
 from flask.cli import load_dotenv
 from view.auth import auth_bp
 from view.usuarios import usuarios_bp
@@ -33,6 +35,19 @@ app.register_blueprint(encam_bp)
 app.register_blueprint(pagamentos_bp)
 
 app.config.from_pyfile("config.py")
+
+
+@app.errorhandler(ErroNegocio)
+def erro_negocio(erro):
+    return jsonify({'error': erro.mensagem, **erro.extra}), erro.status
+
+
+@app.errorhandler(Exception)
+def erro_interno(erro):
+    if isinstance(erro, HTTPException):
+        return erro
+    app.logger.exception('Erro nao tratado')
+    return jsonify({'error': 'Internal server error'}), 500
 
 CORS(
     app,
