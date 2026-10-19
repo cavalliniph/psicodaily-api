@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
 from datetime import datetime
+from decimal import Decimal
 from database.db import get_connection
 from services.upload_service import upload_service
 from util.usuarios import profissional_autenticado
@@ -31,16 +32,27 @@ COLUNAS_PROFISSIONAL = """
 	 , p.ESPECIALIDADE
 	 , p.ABORDAGEM
 	 , p.MODALIDADE
+	 , a.MEDIA AS AVALIACAO
+	 , COALESCE(a.TOTAL, 0) AS TOTAL_AVALIACOES
 """
 
+# Tabela derivada evita GROUP BY com DESCRICAO (BLOB); o CAST impede o AVG de SMALLINT truncar.
 ORIGEM_PROFISSIONAL = """
 FROM PROFISSIONAL p
 INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
+LEFT JOIN (
+	SELECT PROFISSIONAL_ID,
+		   AVG(CAST(NOTA AS NUMERIC(5,2))) AS MEDIA,
+		   COUNT(*) AS TOTAL
+	FROM AVALIACAO GROUP BY PROFISSIONAL_ID
+) a ON a.PROFISSIONAL_ID = p.USUARIO_ID
 """
 
 
 def serializar_profissional(colunas, linha):
 	profissional = dict(zip(colunas, linha))
+	avaliacao = profissional['avaliacao']
+	profissional['avaliacao'] = round(float(avaliacao), 1) if avaliacao is not None else None
 	profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
 	return profissional
 
@@ -114,6 +126,15 @@ def profissionais():
 			if modalidade is None:
 				return resposta_erro('Modalidade deve ser Online ou Presencial')
 
+		avaliacao_min = None
+		if 'avaliacao_min' in request.args:
+			try:
+				avaliacao_min = float(request.args['avaliacao_min'])
+			except ValueError:
+				avaliacao_min = None
+			if avaliacao_min is None or not 1 <= avaliacao_min <= 5:
+				return resposta_erro('avaliacao_min deve ser um numero entre 1 e 5')
+
 		inicio = None
 		fim = None
 		if 'disponibilidade_inicio' in request.args or 'disponibilidade_fim' in request.args:
@@ -133,7 +154,7 @@ def profissionais():
 			return jsonify({ 'error': f'offset deve ser no maximo {LIMITE_PAGINACAO}' }), 400
 
 		filtros = ORIGEM_PROFISSIONAL + " WHERE u.ATIVO = TRUE"
-		params: list[str | int | datetime] = []
+		params: list[str | int | datetime | Decimal] = []
 
 		if conselho is not None:
 			filtros += " AND LOWER(p.CONSELHO_TIPO) = LOWER(?)"
@@ -155,6 +176,11 @@ def profissionais():
 			# Quem atende nos dois formatos aparece em qualquer filtro de modalidade.
 			filtros += " AND p.MODALIDADE IN (?, 'AMBAS')"
 			params.append(modalidade)
+
+		if avaliacao_min is not None:
+			# Sem avaliacao a media e NULL e o profissional fica de fora.
+			filtros += " AND a.MEDIA >= ?"
+			params.append(Decimal(str(avaliacao_min)))
 
 		if preco_min is not None:
 			filtros += " AND p.PRECO_HORA >= ?"

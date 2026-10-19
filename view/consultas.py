@@ -1,12 +1,13 @@
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
+import fdb
 from flask import Blueprint, jsonify, request
 from database.db import get_connection
 from services.upload_service import upload_service
 from funcao import decodificar_token
 from jwt import ExpiredSignatureError, InvalidTokenError
-from util.usuarios import profissional_autenticado
+from util.usuarios import profissional_autenticado, usuario_autenticado
 
 cons_bp = Blueprint('consultas', __name__, url_prefix='/api/consultas')
 
@@ -82,7 +83,8 @@ def consultas():
                      paciente.NOME AS PACIENTE_NOME,
                    r.HUMOR AS ULTIMO_HUMOR,
                    r.QUALIDADE_SONO AS ULTIMA_QUALIDADE_SONO,
-                   r.CRIADO_EM AS ULTIMO_REGISTRO_EM
+                   r.CRIADO_EM AS ULTIMO_REGISTRO_EM,
+                   av.NOTA AS NOTA_AVALIACAO
             FROM SESSAO s
             INNER JOIN PROFISSIONAL p ON p.USUARIO_ID = s.PROFISSIONAL_ID
             INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
@@ -93,6 +95,7 @@ def consultas():
                 WHERE r2.USUARIO_ID = s.PACIENTE_ID
                 ORDER BY r2.CRIADO_EM DESC, r2.REGISTRO_ID DESC
             )
+            LEFT JOIN AVALIACAO av ON av.SESSAO_ID = s.SESSAO_ID
             {where}
             ORDER BY s.DATA_HORA_INICIO DESC
         ''', tuple(parametros))
@@ -296,6 +299,59 @@ def atualizar_consulta(dados_usuario, sessao_id):
             con.rollback()
         print(f'[{__name__}]: {erro}')
         return jsonify({'error': 'Nao foi possivel atualizar a sessao'}), 500
+    finally:
+        if cur is not None:
+            cur.close()
+        if con is not None:
+            con.close()
+
+
+@cons_bp.route('/<int:sessao_id>/avaliacao', methods=['POST'])
+@usuario_autenticado
+def avaliar_consulta(dados_usuario, sessao_id):
+    if dados_usuario.get('usuario_role') != 'PACIENTE' or not dados_usuario.get('id_usuario'):
+        return jsonify({'error': 'Somente o paciente pode avaliar a sessao'}), 403
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict) or set(dados) - {'nota', 'comentario'}:
+        return jsonify({'error': 'Envie apenas nota e comentario'}), 400
+    nota = dados.get('nota')
+    if type(nota) is not int or not 1 <= nota <= 5:
+        return jsonify({'error': 'nota deve ser inteiro entre 1 e 5'}), 400
+    comentario = dados.get('comentario')
+    if comentario is not None:
+        if not isinstance(comentario, str) or len(comentario.strip()) > 500:
+            return jsonify({'error': 'comentario deve ter no maximo 500 caracteres'}), 400
+        comentario = comentario.strip() or None
+
+    con = None
+    cur = None
+    try:
+        con = get_connection()
+        cur = con.cursor()
+        cur.execute('SELECT PROFISSIONAL_ID, STATUS FROM SESSAO WHERE SESSAO_ID = ? AND PACIENTE_ID = ?',
+                    (sessao_id, dados_usuario['id_usuario']))
+        sessao = cur.fetchone()
+        if sessao is None:
+            return jsonify({'error': 'Sessao nao encontrada'}), 404
+        if sessao[1] != 'REALIZADO':
+            return jsonify({'error': 'Só é possível avaliar sessões realizadas'}), 409
+        cur.execute('''INSERT INTO AVALIACAO (SESSAO_ID, PACIENTE_ID, PROFISSIONAL_ID, NOTA, COMENTARIO)
+            VALUES (?, ?, ?, ?, ?)''', (sessao_id, dados_usuario['id_usuario'], sessao[0], nota, comentario))
+        con.commit()
+        return jsonify({'message': 'Sessao avaliada com sucesso',
+                        'avaliacao': {'sessao_id': sessao_id, 'nota': nota}}), 201
+    except fdb.DatabaseError as erro:
+        if con is not None:
+            con.rollback()
+        if 'UQ_AVALIACAO_SESSAO' in str(erro):
+            return jsonify({'error': 'Sessão já avaliada'}), 409
+        print(f'[{__name__}]: {erro}')
+        return jsonify({'error': 'Nao foi possivel avaliar a sessao'}), 500
+    except Exception as erro:
+        if con is not None:
+            con.rollback()
+        print(f'[{__name__}]: {erro}')
+        return jsonify({'error': 'Nao foi possivel avaliar a sessao'}), 500
     finally:
         if cur is not None:
             cur.close()
