@@ -7,7 +7,9 @@ from funcao import (
 	ESPECIALIDADES_PROFISSIONAIS,
 	criar_usuario_base,
 	enviar_email_ativacao,
+	normalizar_abordagem,
 	normalizar_conselho,
+	normalizar_modalidade,
 	normalizar_texto,
 	normalizar_valor_sessao,
 	obter_campo,
@@ -18,6 +20,29 @@ from funcao import (
 prof_bp = Blueprint('profissionais', __name__, url_prefix='/api/profissionais')
 
 LIMITE_PAGINACAO = 2147483647
+
+COLUNAS_PROFISSIONAL = """
+	u.ID_USUARIO
+	 , u.NOME
+	 , p.DESCRICAO
+	 , p.CONSELHO_NUMERO
+	 , p.CONSELHO_TIPO
+	 , p.PRECO_HORA AS PRECO_CENTAVOS
+	 , p.ESPECIALIDADE
+	 , p.ABORDAGEM
+	 , p.MODALIDADE
+"""
+
+ORIGEM_PROFISSIONAL = """
+FROM PROFISSIONAL p
+INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
+"""
+
+
+def serializar_profissional(colunas, linha):
+	profissional = dict(zip(colunas, linha))
+	profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
+	return profissional
 
 @prof_bp.route('/', methods=['GET'])
 def profissionais():
@@ -77,6 +102,18 @@ def profissionais():
 		if especialidade and conselho != conselho_padrao:
 			return resposta_erro('tipo_conselho incompativel com a especialidade')
 
+		abordagem = None
+		if 'abordagem' in request.args:
+			abordagem = normalizar_abordagem(request.args['abordagem'])
+			if abordagem is None:
+				return resposta_erro('Abordagem invalida')
+
+		modalidade = None
+		if 'modalidade' in request.args:
+			modalidade = normalizar_modalidade(request.args['modalidade'])
+			if modalidade is None:
+				return resposta_erro('Modalidade deve ser Online ou Presencial')
+
 		inicio = None
 		fim = None
 		if 'disponibilidade_inicio' in request.args or 'disponibilidade_fim' in request.args:
@@ -95,11 +132,7 @@ def profissionais():
 		if offset > LIMITE_PAGINACAO:
 			return jsonify({ 'error': f'offset deve ser no maximo {LIMITE_PAGINACAO}' }), 400
 
-		filtros = """
-		FROM PROFISSIONAL p
-		INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
-		WHERE u.ATIVO = TRUE
-		"""
+		filtros = ORIGEM_PROFISSIONAL + " WHERE u.ATIVO = TRUE"
 		params: list[str | int | datetime] = []
 
 		if conselho is not None:
@@ -113,6 +146,15 @@ def profissionais():
 		if nome:
 			filtros += " AND UPPER(u.NOME) CONTAINING UPPER(?)"
 			params.append(nome)
+
+		if abordagem is not None:
+			filtros += " AND p.ABORDAGEM = ?"
+			params.append(abordagem)
+
+		if modalidade is not None:
+			# Quem atende nos dois formatos aparece em qualquer filtro de modalidade.
+			filtros += " AND p.MODALIDADE IN (?, 'AMBAS')"
+			params.append(modalidade)
 
 		if preco_min is not None:
 			filtros += " AND p.PRECO_HORA >= ?"
@@ -134,14 +176,7 @@ def profissionais():
 			"""
 			params.extend([fim, inicio])
 
-		query = """
-		SELECT FIRST ? SKIP ? u.ID_USUARIO
-			 , u.NOME
-			 , p.DESCRICAO
-			 , p.CONSELHO_NUMERO
-			 , p.CONSELHO_TIPO
-			 , p.PRECO_HORA AS PRECO_CENTAVOS
-		""" + filtros + " ORDER BY u.ID_USUARIO"
+		query = "SELECT FIRST ? SKIP ?" + COLUNAS_PROFISSIONAL + filtros + " ORDER BY u.ID_USUARIO"
 
 		con = get_connection()
 		cur = con.cursor()
@@ -149,9 +184,7 @@ def profissionais():
 		resultados = cur.fetchall()
 
 		columns = [desc[0].lower() for desc in cur.description]
-		payload = [dict(zip(columns, row)) for row in resultados]
-		for profissional in payload:
-			profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
+		payload = [serializar_profissional(columns, row) for row in resultados]
 
 		cur.execute("SELECT COUNT(*) " + filtros, tuple(params))
 		total_res = cur.fetchone()
@@ -186,16 +219,8 @@ def profissional(id):
 	cur = con.cursor()
 
 	try:
-		cur.execute("""
-		SELECT u.ID_USUARIO
-			 , u.NOME
-			 , p.DESCRICAO
-			 , p.CONSELHO_NUMERO
-			 , p.CONSELHO_TIPO
-			 , p.PRECO_HORA AS PRECO_CENTAVOS
-		FROM PROFISSIONAL p
-		INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
-		WHERE p.USUARIO_ID = ? AND u.ATIVO = TRUE""", (id,))
+		cur.execute("SELECT" + COLUNAS_PROFISSIONAL + ORIGEM_PROFISSIONAL
+					+ " WHERE p.USUARIO_ID = ? AND u.ATIVO = TRUE", (id,))
 
 		resultado = cur.fetchone()
 
@@ -203,8 +228,7 @@ def profissional(id):
 			return jsonify({ 'error': 'Profissional não encontrado' }), 404
 
 		columns = [desc[0].lower() for desc in cur.description]
-		payload = dict(zip(columns, resultado))
-		payload['foto_url'] = upload_service.url_foto_usuario(id)
+		payload = serializar_profissional(columns, resultado)
 
 		return jsonify({ 'message': 'Profissionais obtidos com sucesso', 'profissionais': payload }), 200
 	except Exception as e:
@@ -283,6 +307,20 @@ def cadastro_profissional():
 		if erro_dias:
 			return resposta_erro(erro_dias)
 
+		abordagem = None
+		abordagem_recebida = obter_campo(formulario, 'abordagem')
+		if abordagem_recebida:
+			abordagem = normalizar_abordagem(abordagem_recebida)
+			if abordagem is None:
+				return resposta_erro("Abordagem invalida")
+
+		modalidade = None
+		modalidade_recebida = obter_campo(formulario, 'modalidade')
+		if modalidade_recebida:
+			modalidade = normalizar_modalidade(modalidade_recebida)
+			if modalidade is None:
+				return resposta_erro("Modalidade deve ser Online, Presencial ou Ambas")
+
 		usuario, erro = criar_usuario_base(
 			cur,
 			formulario,
@@ -302,9 +340,12 @@ def cadastro_profissional():
 							conselho_numero,
 							especialidade,
 							preco_hora,
-							descricao
-						) VALUES (?, ?, ?, ?, ?, ?)""",
-				 (usuario["id_usuario"], conselho_tipo, conselho_numero, especialidade, preco_hora, descricao))
+							descricao,
+							abordagem,
+							modalidade
+						) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+				 (usuario["id_usuario"], conselho_tipo, conselho_numero, especialidade, preco_hora, descricao,
+				  abordagem, modalidade))
 
 		con.commit()
 		enviar_email_ativacao(usuario["email"], usuario["codigo"], usuario["nome"])
@@ -320,7 +361,9 @@ def cadastro_profissional():
 				"conselho_numero": conselho_numero,
 				"especialidade": especialidade,
 				"preco_hora": preco_hora,
-				"dias_atendimento": dias_atendimento
+				"dias_atendimento": dias_atendimento,
+				"abordagem": abordagem,
+				"modalidade": modalidade
 			}
 		}), 201
 	except Exception as e:
@@ -338,8 +381,9 @@ def cadastro_profissional():
 @profissional_autenticado
 def atualizar_profissional(dados_usuario):
 	formulario = request.get_json(silent=True) or {}
-	if not isinstance(formulario, dict) or not formulario or not set(formulario).issubset({'descricao', 'preco_hora'}):
-		return resposta_erro("Informe descricao e/ou preco_hora")
+	if not isinstance(formulario, dict) or not formulario or not set(formulario).issubset(
+			{'descricao', 'preco_hora', 'abordagem', 'modalidade'}):
+		return resposta_erro("Informe apenas descricao, preco_hora, abordagem e/ou modalidade")
 
 	atualizacoes = {}
 	if 'descricao' in formulario:
@@ -352,6 +396,23 @@ def atualizar_profissional(dados_usuario):
 		if preco_hora is None:
 			return resposta_erro("Valor em reais deve ser positivo, ate 100000, com no maximo duas casas decimais")
 		atualizacoes['PRECO_HORA'] = preco_hora
+	# Vazio ou null limpa a coluna.
+	for campo, normalizar, mensagem in (
+		('abordagem', normalizar_abordagem, "Abordagem invalida"),
+		('modalidade', normalizar_modalidade, "Modalidade deve ser Online, Presencial ou Ambas"),
+	):
+		if campo not in formulario:
+			continue
+		valor = formulario[campo]
+		if valor is not None and not isinstance(valor, str):
+			return resposta_erro(mensagem)
+		if valor is None or not valor.strip():
+			atualizacoes[campo.upper()] = None
+			continue
+		normalizado = normalizar(valor)
+		if normalizado is None:
+			return resposta_erro(mensagem)
+		atualizacoes[campo.upper()] = normalizado
 
 	con = get_connection()
 	cur = con.cursor()

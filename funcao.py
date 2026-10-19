@@ -106,6 +106,19 @@ ESPECIALIDADES_PROFISSIONAIS = {
 	},
 }
 
+ABORDAGENS = ["TCC", "Psicanálise", "Humanista", "Gestalt", "Comportamental"]
+MODALIDADES = {"ONLINE", "PRESENCIAL", "AMBAS"}
+
+
+def normalizar_abordagem(valor):
+	recebida = normalizar_texto(str(valor).strip())
+	return next((nome for nome in ABORDAGENS if normalizar_texto(nome) == recebida), None)
+
+
+def normalizar_modalidade(valor):
+	modalidade = normalizar_texto(str(valor).strip())
+	return modalidade if modalidade in MODALIDADES else None
+
 DIAS_ATENDIMENTO = {
 	"SEGUNDA": "Segunda",
 	"TERCA": "Terca",
