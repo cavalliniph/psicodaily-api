@@ -4,6 +4,8 @@ from database.db import get_connection
 from services.auth_service import gerar_token
 
 PROFISSIONAL, PACIENTE, PSIQUIATRA, OUTRO_PACIENTE, ADMIN = 22, 23, 24, 25, 26
+# Porta do fixture `servidor` (testes de WebSocket)
+PORTA = 5057
 
 
 def executar(sql, params=()):

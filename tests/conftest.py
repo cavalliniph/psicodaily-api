@@ -1,7 +1,19 @@
-import pytest
+import threading
 
-from apoio import ADMIN, OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, PSIQUIATRA, cliente, executar
+import pytest
+from werkzeug.serving import make_server
+
+from apoio import ADMIN, OUTRO_PACIENTE, PACIENTE, PORTA, PROFISSIONAL, PSIQUIATRA, cliente, executar
 from app import app
+
+
+@pytest.fixture(scope='session')
+def servidor():
+    """App de verdade numa porta local, para os testes de WebSocket."""
+    servidor = make_server('127.0.0.1', PORTA, app, threaded=True)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    yield
+    servidor.shutdown()
 
 
 @pytest.fixture

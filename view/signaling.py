@@ -3,7 +3,7 @@ from extensions.websocket import sock
 from services.auth_service import decodificar_token
 from services.consultas_service import avisar_entrada_na_sala, sala_da_sessao
 from services.signaling_service import signaling_service
-from util.usuarios import token_da_requisicao
+from util.usuarios import origem_permitida, token_da_requisicao
 
 signaling_bp = Blueprint('signaling', __name__)
 
@@ -11,6 +11,9 @@ signaling_bp = Blueprint('signaling', __name__)
 @sock.route("/ws/signaling", bp=signaling_bp)
 def signaling(ws):
     try:
+        if not origem_permitida():
+            ws.close()
+            return
         token = token_da_requisicao()
         id_usuario = decodificar_token(token).get("id_usuario") if token else None
         try:

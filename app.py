@@ -21,6 +21,7 @@ from view.lista_espera import lista_espera_bp
 from view.dashboard import dashboard_bp
 from view.chat import chat_bp
 from flask_cors import CORS
+from config import ORIGENS_FRONT
 # from pathlib import Path
 
 from extensions.websocket import sock
@@ -82,11 +83,7 @@ def erro_interno(erro):
 CORS(
     app,
     supports_credentials=True,
-    origins=[
-        'http://localhost:5173',
-        'https://psicodaily-front.vercel.app',
-        'http://10.92.11.34:5173'
-    ]
+    origins=ORIGENS_FRONT
 )
 
 if __name__ == '__main__':

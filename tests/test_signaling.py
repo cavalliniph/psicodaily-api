@@ -1,27 +1,13 @@
 # Sobe o app numa porta local e conecta clientes WebSocket como o front.
 import json
-import threading
 from datetime import datetime, timedelta
 
 import pytest
 import simple_websocket
-from werkzeug.serving import make_server
 
-from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, executar
-from app import app
+from apoio import OUTRO_PACIENTE, PACIENTE, PORTA, PROFISSIONAL, executar
 from services import consultas_service
 from services.auth_service import gerar_token
-
-PORTA = 5057
-
-
-@pytest.fixture(scope='module')
-def servidor():
-    servidor = make_server('127.0.0.1', PORTA, app, threaded=True)
-    threading.Thread(target=servidor.serve_forever, daemon=True).start()
-    yield
-    servidor.shutdown()
-
 
 @pytest.fixture
 def emails(monkeypatch):
@@ -35,10 +21,11 @@ def emails(monkeypatch):
 def conectar(servidor):
     clientes = []
 
-    def abrir(id_usuario, papel, sessao_id):
+    def abrir(id_usuario, papel, sessao_id, origem=None):
         token = gerar_token({'id_usuario': id_usuario, 'usuario_role': papel})
+        cabecalhos = {'Cookie': f'access_token={token}', **({'Origin': origem} if origem else {})}
         ws = simple_websocket.Client.connect(f'ws://127.0.0.1:{PORTA}/ws/signaling?sessao_id={sessao_id}',
-                                             headers={'Cookie': f'access_token={token}'})
+                                             headers=cabecalhos)
         clientes.append(ws)
         return ws
 
@@ -119,3 +106,11 @@ def test_presenca_aviso_por_email_e_repasse(conectar, emails, sessoes):
     saiu = receber(paciente)
     assert saiu['type'] == 'peer-left' and saiu['id_usuario'] == PROFISSIONAL, saiu
     paciente.close()
+
+
+def test_origem_estranha_e_recusada(conectar, emails, sessoes):
+    # S7: outro site aberto no navegador do participante leva o cookie, mas nao entra na sala
+    agora = datetime.now().replace(second=0, microsecond=0)
+    sessao = nova_sessao(sessoes, agora - timedelta(minutes=5), agora + timedelta(minutes=50))
+    assert fechado_pelo_servidor(conectar(PACIENTE, 'PACIENTE', sessao, 'https://site-malicioso.example'))
+    assert receber(conectar(PACIENTE, 'PACIENTE', sessao, 'https://psicodaily-front.vercel.app'))['type'] == 'peers'

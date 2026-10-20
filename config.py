@@ -6,3 +6,10 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# Front autorizado: CORS do app.py e Origin do handshake WebSocket (S7). O app mobile nao manda Origin.
+ORIGENS_FRONT = [
+    'http://localhost:5173',
+    'https://psicodaily-front.vercel.app',
+    'http://10.92.11.34:5173',
+]

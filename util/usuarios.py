@@ -2,7 +2,15 @@ from flask import jsonify, request
 from functools import wraps
 import jwt
 
+from config import ORIGENS_FRONT
 from services.auth_service import decodificar_token
+
+
+def origem_permitida():
+    # O handshake WS nao passa pelo CORS e leva o cookie: sem isso, qualquer site aberto no navegador entra no WS (S7).
+    # Sem Origin = cliente fora do navegador (app mobile), que precisa do proprio token.
+    origem = request.headers.get("Origin")
+    return origem is None or origem in ORIGENS_FRONT
 
 
 def token_da_requisicao():
