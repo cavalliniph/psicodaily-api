@@ -1,9 +1,8 @@
-import jwt
 from flask import Blueprint, jsonify, request
 
 from extensions.websocket import sock
 from services import chat_service
-from services.auth_service import decodificar_token
+from services.auth_service import usuario_do_token
 from services.erros import ErroNegocio
 from util.usuarios import origem_permitida, token_da_requisicao, usuario_autenticado
 
@@ -52,7 +51,7 @@ def tempo_real(ws):
     try:
         if not origem_permitida() or not token:
             raise ErroNegocio('Conexao recusada', 401)
-        dados = decodificar_token(token)
+        dados = usuario_do_token(token)
         chat_service.manter_conexao(dados['id_usuario'], dados.get('usuario_role'), ws)
-    except (ErroNegocio, jwt.InvalidTokenError):
+    except ErroNegocio:
         ws.close()

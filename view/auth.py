@@ -9,20 +9,24 @@ def _corpo():
 	return request.get_json(silent=True) or {}
 
 
-@auth_bp.route('/login', methods=['POST'])
-def login():
-	data = _corpo()
-	usuario, token = auth_service.autenticar(data.get('email'), data.get('senha'))
-	response = make_response({"message": "Usuario logado com sucesso", "usuario": usuario})
+def _com_cookie(response, token):
 	response.set_cookie(
 		'access_token',
 		token,
 		path='/',
+		max_age=auth_service.DURACAO_TOKEN,
 		httponly=True,
 		secure=True,
 		samesite="None",
 	)
 	return response
+
+
+@auth_bp.route('/login', methods=['POST'])
+def login():
+	data = _corpo()
+	usuario, token = auth_service.autenticar(data.get('email'), data.get('senha'))
+	return _com_cookie(make_response({"message": "Usuario logado com sucesso", "usuario": usuario}), token)
 
 
 @auth_bp.route('/login_mobile', methods=['POST'])
@@ -59,8 +63,9 @@ def alterar_senha():
 @usuario_autenticado
 def alterar_senha_logado(dados_usuario):
 	data = _corpo()
-	auth_service.alterar_senha_logado(dados_usuario.get('id_usuario'), data.get('senha_atual'), data.get('nova_senha'))
-	return jsonify({"message": "Senha alterada com sucesso"})
+	token = auth_service.alterar_senha_logado(dados_usuario.get('id_usuario'), dados_usuario.get('usuario_role'),
+											  data.get('senha_atual'), data.get('nova_senha'))
+	return _com_cookie(jsonify({"message": "Senha alterada com sucesso"}), token)
 
 
 @auth_bp.route('/logout', methods=['POST'])

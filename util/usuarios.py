@@ -1,9 +1,8 @@
 from flask import jsonify, request
 from functools import wraps
-import jwt
 
 from config import ORIGENS_FRONT
-from services.auth_service import decodificar_token
+from services.auth_service import usuario_do_token
 
 
 def origem_permitida():
@@ -29,14 +28,8 @@ def usuario_autenticado(funcao):
         if not token:
             return jsonify({ "error": "Usuario nao autenticado" }), 401
 
-        try:
-            dados = decodificar_token(token)
-        except jwt.ExpiredSignatureError:
-            return jsonify({ "error": "Expired token" }), 401
-        except jwt.InvalidTokenError:
-            return jsonify({ "error": "Token invalido" }), 401
-
-        return funcao(dados, *args, **kwargs)
+        # Token vencido, invalido ou anterior a troca de senha: ErroNegocio 401
+        return funcao(usuario_do_token(token), *args, **kwargs)
 
     return wrapper
 

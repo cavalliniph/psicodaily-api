@@ -1,6 +1,6 @@
 from flask import Blueprint, request
 from extensions.websocket import sock
-from services.auth_service import decodificar_token
+from services.auth_service import usuario_do_token
 from services.consultas_service import avisar_entrada_na_sala, sala_da_sessao
 from services.signaling_service import signaling_service
 from util.usuarios import origem_permitida, token_da_requisicao
@@ -15,7 +15,7 @@ def signaling(ws):
             ws.close()
             return
         token = token_da_requisicao()
-        id_usuario = decodificar_token(token).get("id_usuario") if token else None
+        id_usuario = usuario_do_token(token).get("id_usuario") if token else None
         try:
             sessao_id = int(request.args.get("sessao_id", ""))
         except (TypeError, ValueError):

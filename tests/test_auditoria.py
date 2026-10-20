@@ -4,7 +4,6 @@ from datetime import date, datetime, time, timedelta
 import pytest
 
 from apoio import PACIENTE, PROFISSIONAL, executar
-from services.auth_service import criar_hash_senha
 
 IP = {'X-Forwarded-For': '203.0.113.7'}
 
@@ -14,15 +13,6 @@ def novas(ultima_auditoria):
     """Linhas de AUDITORIA criadas pelo teste, em ordem."""
     return lambda: executar('''SELECT USUARIO_ID, ACAO, ENTIDADE, ENTIDADE_ID, IP FROM AUDITORIA
         WHERE AUDITORIA_ID > ? ORDER BY AUDITORIA_ID''', (ultima_auditoria,))
-
-
-@pytest.fixture
-def conta_do_paciente():
-    """Senha do paciente conhecida (Senha@123) no teste; senha e e-mail originais voltam no fim."""
-    senha, email = executar('SELECT SENHA, EMAIL FROM USUARIO WHERE ID_USUARIO = ?', (PACIENTE,))[0]
-    executar('UPDATE USUARIO SET SENHA = ? WHERE ID_USUARIO = ?', (criar_hash_senha('Senha@123'), PACIENTE))
-    yield email
-    executar('UPDATE USUARIO SET SENHA = ?, EMAIL = ? WHERE ID_USUARIO = ?', (senha, email, PACIENTE))
 
 
 def test_login_falha_e_sucesso_com_ip(anonimo, conta_do_paciente, novas):

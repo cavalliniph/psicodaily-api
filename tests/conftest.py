@@ -5,6 +5,7 @@ from werkzeug.serving import make_server
 
 from apoio import ADMIN, OUTRO_PACIENTE, PACIENTE, PORTA, PROFISSIONAL, PSIQUIATRA, cliente, executar
 from app import app
+from services.auth_service import criar_hash_senha
 
 
 @pytest.fixture(scope='session')
@@ -90,3 +91,13 @@ def agenda_vazia():
     for linha in original:
         executar('INSERT INTO DISPONIBILIDADE (PROFISSIONAL_ID, DIA_SEMANA, HORA_INICIO, HORA_FIM) VALUES (?, ?, ?, ?)',
                  (PROFISSIONAL, *linha))
+
+
+@pytest.fixture
+def conta_do_paciente():
+    """Senha do paciente conhecida (Senha@123) no teste; senha, e-mail e codigo originais voltam no fim."""
+    colunas = 'SENHA, EMAIL, CODIGO, CODIGO_EXPIRA_EM, CODIGO_TENTATIVAS, SENHA_ALTERADA_EM'
+    original = executar(f'SELECT {colunas} FROM USUARIO WHERE ID_USUARIO = ?', (PACIENTE,))[0]
+    executar('UPDATE USUARIO SET SENHA = ? WHERE ID_USUARIO = ?', (criar_hash_senha('Senha@123'), PACIENTE))
+    yield original[1]
+    executar(f"UPDATE USUARIO SET {colunas.replace(',', ' = ?,')} = ? WHERE ID_USUARIO = ?", (*original, PACIENTE))
