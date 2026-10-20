@@ -1,6 +1,7 @@
 from datetime import date
 
 from database.db import transacao
+from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.registros_service import COLUNAS, evolucao, inicio_periodo, serializar
 from services.upload_service import upload_service
@@ -19,6 +20,7 @@ def prontuario(profissional_id, paciente_id, dias, antes):
         paciente = cur.fetchone()
         if paciente is None:
             raise ErroNegocio('Paciente nao encontrado', 404)
+        auditar(cur, profissional_id, 'PRONTUARIO_ACESSO', 'USUARIO', paciente_id)
 
         cur.execute('''SELECT FIRST 1 DATA_HORA_INICIO, STATUS FROM SESSAO
             WHERE PACIENTE_ID = ? AND PROFISSIONAL_ID = ? AND STATUS = 'REALIZADO'

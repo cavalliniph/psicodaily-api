@@ -44,6 +44,7 @@ paciente = cliente(PACIENTE, 'PACIENTE')
 outro = cliente(OUTRO_PACIENTE, 'PACIENTE')
 amanha = (datetime.now() + timedelta(days=400)).replace(hour=10, minute=0, second=0, microsecond=0)
 criados = {'SESSAO': [], 'REGISTRO': [], 'ENCAMINHAMENTO': []}
+ultima_auditoria = executar('SELECT COALESCE(MAX(AUDITORIA_ID), 0) FROM AUDITORIA')[0]
 
 try:
     # saude (readiness probe)
@@ -175,3 +176,4 @@ finally:
         coluna = {'SESSAO': 'SESSAO_ID', 'REGISTRO': 'REGISTRO_ID', 'ENCAMINHAMENTO': 'ENCAMINHAMENTO_ID'}[tabela]
         for id_ in ids:
             executar(f'DELETE FROM {tabela} WHERE {coluna} = ?', (id_,))
+    executar('DELETE FROM AUDITORIA WHERE AUDITORIA_ID > ?', (ultima_auditoria,))

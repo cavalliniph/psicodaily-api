@@ -1,6 +1,7 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 from services.erros import ErroNegocio
+from services.auditoria_service import IP_ATUAL
 from database.db import banco_responde
 from flask.cli import load_dotenv
 from view.auth import auth_bp
@@ -40,6 +41,12 @@ app.register_blueprint(conteudos_bp)
 app.register_blueprint(favoritos_bp)
 
 app.config.from_pyfile("config.py")
+
+
+@app.before_request
+def guardar_ip():
+    # O proxy do Northflank acrescenta o IP do cliente no fim do X-Forwarded-For
+    IP_ATUAL.set(request.access_route[-1] if request.access_route else request.remote_addr)
 
 
 @app.route('/api/saude')

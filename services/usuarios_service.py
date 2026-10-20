@@ -2,6 +2,7 @@ from database.db import transacao
 from funcao import (obter_campo, somente_digitos, validar_cpf, validar_email, validar_imagem_usuario,
                     validar_nome, validar_senha, validar_telefone)
 from services import email_service
+from services.auditoria_service import auditar
 from services.auth_service import criar_hash_senha, gerar_codigo
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
@@ -140,6 +141,8 @@ def atualizar_perfil(id_usuario, formulario, imagem, substituir_tudo):
         if atualizacoes:
             definicoes = ", ".join(f"{CAMPOS_PERFIL[campo]} = ?" for campo in atualizacoes)
             cur.execute(f"UPDATE USUARIO SET {definicoes} WHERE ID_USUARIO = ?", (*atualizacoes.values(), id_usuario))
+            if atualizacoes.get("email", email_atual) != email_atual:
+                auditar(cur, id_usuario, 'EMAIL_ALTERADO', 'USUARIO', id_usuario)
         salvar_imagem_usuario(imagem, id_usuario)
 
 

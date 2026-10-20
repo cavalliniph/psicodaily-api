@@ -38,6 +38,7 @@ anonimo = app.test_client()
 original = executar('SELECT DIA_SEMANA, HORA_INICIO, HORA_FIM FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?',
                     (PROFISSIONAL,))
 sessoes = []
+ultima_auditoria = executar('SELECT COALESCE(MAX(AUDITORIA_ID), 0) FROM AUDITORIA')[0][0]
 # Daqui a uma semana, sempre no futuro e no mesmo dia da semana
 dia = date.today() + timedelta(days=7)
 semana = dia_semana(dia)
@@ -121,6 +122,7 @@ finally:
         cur.execute('DELETE FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?', (PROFISSIONAL,))
         cur.executemany('INSERT INTO DISPONIBILIDADE (PROFISSIONAL_ID, DIA_SEMANA, HORA_INICIO, HORA_FIM) VALUES (?, ?, ?, ?)',
                         [(PROFISSIONAL, *linha) for linha in original])
+        cur.execute('DELETE FROM AUDITORIA WHERE AUDITORIA_ID > ?', (ultima_auditoria,))
         con.commit()
     finally:
         con.close()

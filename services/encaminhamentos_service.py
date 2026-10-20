@@ -1,4 +1,5 @@
 from database.db import transacao
+from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 
 
@@ -19,7 +20,9 @@ def criar(profissional_id, dados):
         VALUES(?, ?, ?, ?, ?) RETURNING *
         """, (id_usuario, profissional_id, dados.get('id_cid') or None, motivo, 'ATIVO'))
         linha = cur.fetchone()
-        return dict(zip([desc[0].lower() for desc in cur.description], linha))
+        encaminhamento = dict(zip([desc[0].lower() for desc in cur.description], linha))
+        auditar(cur, profissional_id, 'ENCAMINHAMENTO_CRIADO', 'ENCAMINHAMENTO', encaminhamento['encaminhamento_id'])
+        return encaminhamento
 
 
 def listar():

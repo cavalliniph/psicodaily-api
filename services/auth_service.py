@@ -7,6 +7,7 @@ import config
 from database.db import transacao
 from funcao import validar_senha
 from services import email_service
+from services.auditoria_service import auditar, auditar_avulso
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 
@@ -42,11 +43,14 @@ def autenticar(email, senha):
         usuario = cur.fetchone()
 
     if not usuario:
+        auditar_avulso(None, 'LOGIN_FALHA')
         raise ErroNegocio("Usuario nao encontrado", 404)
     if not senha_correta(usuario[1], senha):
+        auditar_avulso(usuario[0], 'LOGIN_FALHA', 'USUARIO', usuario[0])
         raise ErroNegocio("Senha incorreta", 401)
     if not usuario[2]:
         raise ErroNegocio("Usuario inativo", 403)
+    auditar_avulso(usuario[0], 'LOGIN', 'USUARIO', usuario[0])
 
     token = gerar_token({'id_usuario': usuario[0], 'usuario_role': usuario[3]})
     return {
@@ -105,6 +109,7 @@ def alterar_senha(email, codigo, nova_senha):
             raise ErroNegocio("Codigo invalido", 401)
         cur.execute("UPDATE usuario SET senha = ?, codigo = NULL WHERE id_usuario = ?",
                     (criar_hash_senha(nova_senha), usuario[0]))
+        auditar(cur, usuario[0], 'SENHA_ALTERADA', 'USUARIO', usuario[0])
 
 
 def alterar_senha_logado(id_usuario, senha_atual, nova_senha):
@@ -121,3 +126,4 @@ def alterar_senha_logado(id_usuario, senha_atual, nova_senha):
         if not senha_correta(usuario[0], senha_atual):
             raise ErroNegocio("Senha atual incorreta", 401)
         cur.execute("UPDATE USUARIO SET SENHA = ? WHERE ID_USUARIO = ?", (criar_hash_senha(nova_senha), id_usuario))
+        auditar(cur, id_usuario, 'SENHA_ALTERADA', 'USUARIO', id_usuario)

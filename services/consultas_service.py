@@ -7,6 +7,7 @@ import fdb
 
 from database.db import transacao
 from services import disponibilidade_service, email_service
+from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 
@@ -143,7 +144,9 @@ def agendar(paciente_id, papel, data):
           , LINK_REUNIAO)
             VALUES(?, ?, ?, ?, ?, ?, 'AGENDADO', ?, ?) RETURNING *
         """, (paciente_id, id_profissional, None, None, inicio, fim, profissional[0], None))
-        return _sessao_retornada(cur)
+        sessao = _sessao_retornada(cur)
+        auditar(cur, paciente_id, 'SESSAO_AGENDADA', 'SESSAO', sessao['sessao_id'])
+        return sessao
 
 
 def _ler_link(link):
@@ -212,7 +215,9 @@ def atualizar(profissional_id, sessao_id, dados):
         cur.execute(f'''UPDATE SESSAO SET {', '.join(campos)}
             WHERE SESSAO_ID = ? AND PROFISSIONAL_ID = ? RETURNING *''',
                     (*parametros, sessao_id, profissional_id))
-        return _sessao_retornada(cur)
+        sessao = _sessao_retornada(cur)
+        auditar(cur, profissional_id, 'SESSAO_ALTERADA', 'SESSAO', sessao_id)
+        return sessao
 
 
 def avaliar(paciente_id, papel, sessao_id, dados):
