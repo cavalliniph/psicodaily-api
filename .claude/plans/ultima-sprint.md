@@ -284,7 +284,7 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 | 24 | Cancelamento e reembolso | **?** Regras (ex.: ≥24h reembolso total, <24h 50%, falta 0). `PATCH /api/consultas/<id>` hoje só aceita profissional; adicionar cancelamento pelo paciente. Reembolso via Arkhé: **? confirmar se a API faz estorno de PIX**, senão fica registro `REEMBOLSO_PENDENTE` para o admin | M |
 | 32 | Financeiro do psicólogo (realizadas, recebido, taxas, repasses) | Sobre F2: `GET /api/pagamentos/financeiro` por profissional, a partir de `PAGAMENTO` + `TAXA_PLATAFORMA` (env). `REPASSE (PROFISSIONAL_ID, PERIODO, VALOR_CENTAVOS, STATUS)`. **?** repasse manual pelo admin ou automático. Fecha S9 | M |
 | 17 | PIX, cartão e boleto | **? Verificar se a Arkhé tem cartão e boleto.** Se tiver: `METODO` em `PAGAMENTO` + rota por método. Se não: gateway extra (Asaas, Mercado Pago, Stripe) atrás da mesma interface de `pagamentos_service`. Cartão **nunca** passa pelo nosso servidor (tokenização do gateway no front) | M a G |
-| 4 / 27 | Dashboards mobile do psicólogo e do paciente | Front/mobile. Backend: `GET /api/dashboard`, que monta por papel o que já existe (próximas sessões, pacientes do dia, ganhos de F2, notificações não lidas de F3, favoritos de 7). Uma rota em vez de N chamadas no mobile | P (depois de F2/F3/7) |
+| 4 / 27 | Dashboards mobile do psicólogo e do paciente | **Feito no backend** (20/10/2026): `GET /api/dashboard`. Front/mobile: telas iniciais. Plano original: Front/mobile. Backend: `GET /api/dashboard`, que monta por papel o que já existe (próximas sessões, pacientes do dia, ganhos de F2, notificações não lidas de F3, favoritos de 7). Uma rota em vez de N chamadas no mobile | P (depois de F2/F3/7) |
 
 ### Onda C: comunicação (F3, F5, F6)
 

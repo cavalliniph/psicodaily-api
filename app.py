@@ -18,6 +18,7 @@ from view.favoritos import favoritos_bp
 from view.admin import admin_bp
 from view.notificacoes import notificacoes_bp
 from view.lista_espera import lista_espera_bp
+from view.dashboard import dashboard_bp
 from flask_cors import CORS
 # from pathlib import Path
 
@@ -45,6 +46,7 @@ app.register_blueprint(favoritos_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notificacoes_bp)
 app.register_blueprint(lista_espera_bp)
+app.register_blueprint(dashboard_bp)
 
 app.config.from_pyfile("config.py")
 
