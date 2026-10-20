@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import fdb
 
 from database.db import transacao
-from services import disponibilidade_service, email_service
+from services import disponibilidade_service, email_service, lista_espera_service, notificacoes_service
 from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
@@ -215,9 +215,13 @@ def atualizar(profissional_id, sessao_id, dados):
         cur.execute(f'''UPDATE SESSAO SET {', '.join(campos)}
             WHERE SESSAO_ID = ? AND PROFISSIONAL_ID = ? RETURNING *''',
                     (*parametros, sessao_id, profissional_id))
-        sessao = _sessao_retornada(cur)
+        atualizada = _sessao_retornada(cur)
         auditar(cur, profissional_id, 'SESSAO_ALTERADA', 'SESSAO', sessao_id)
-        return sessao
+        emails = []
+        if status == 'CANCELADO':
+            emails = lista_espera_service.avisar_vaga(cur, profissional_id, sessao[1], sessao[2], sessao[3])
+    notificacoes_service.enviar_emails(emails)
+    return atualizada
 
 
 def avaliar(paciente_id, papel, sessao_id, dados):

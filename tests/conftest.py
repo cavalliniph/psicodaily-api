@@ -43,6 +43,14 @@ def ultima_auditoria():
 
 
 @pytest.fixture
+def ultima_notificacao():
+    """Apaga as notificacoes criadas pelo teste."""
+    ultima = executar('SELECT COALESCE(MAX(NOTIFICACAO_ID), 0) FROM NOTIFICACAO')[0][0]
+    yield ultima
+    executar('DELETE FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima,))
+
+
+@pytest.fixture
 def sessoes():
     """Lista onde o teste guarda os SESSAO_ID que criou; a AVALIACAO sai junto (cascade)."""
     criadas = []
