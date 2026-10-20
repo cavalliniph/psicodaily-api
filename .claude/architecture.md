@@ -72,7 +72,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 - `USUARIO`: base de todos (role `PACIENTE/PSICOLOGO/PSIQUIATRA/ADMIN`, CPF, senha bcrypt, `codigo` de 6 dígitos para ativação/recuperação, `ativo`, `CRIADO_EM`, `NULL` para quem se cadastrou antes da migration 0009). Não há rota que crie ADMIN: promover com `UPDATE USUARIO SET USUARIO_ROLE = 'ADMIN'` e novo login (o papel vai no token).
 - `PROFISSIONAL`: 1:1 com usuário (`USUARIO_ID`), conselho CRP/CRM, preço, dias de atendimento, `ABORDAGEM` (lista `ABORDAGENS` em `funcao.py`) e `MODALIDADE` (`dm_modalidade`: `ONLINE/PRESENCIAL/AMBAS`). O filtro de modalidade inclui sempre `AMBAS`. Perfil completo, todos opcionais: `FORMACAO`, `ANO_INICIO_ATUACAO` (guarda o ano, não os anos, para não envelhecer), `IDIOMAS` e `AREAS_ATUACAO` (nomes canônicos de `IDIOMAS`/`AREAS_ATUACAO` em `funcao.py`, separados por vírgula; até 8 áreas) e `VIDEO_URL` (só YouTube/Vimeo, gravado já como URL de embed `youtube-nocookie.com/embed/<id>` ou `player.vimeo.com/video/<id>`). Os campos opcionais ficam em `CAMPOS_OPCIONAIS` (`services/profissionais_service.py`): incluir um campo novo é uma linha ali, mais a coluna.
 - `REGISTRO`: diário do paciente (humor, sono, alimentação, exercício, anotação BLOB).
-- `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`.
+- `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`. Só cria quem tem sessão não cancelada com o paciente; `GET` lista só os do próprio profissional.
 - `SESSAO`: consulta paciente × profissional; `STATUS` `AGENDADO/CONFIRMADO/REALIZADO/CANCELADO`, `VALOR_CENTAVOS` inteiro, FK opcional para encaminhamento e conversa.
 - `DISPONIBILIDADE`: janelas semanais do profissional (`DIA_SEMANA` 0 = domingo, como `EXTRACT(WEEKDAY)`; `HORA_INICIO`/`HORA_FIM`). Os dias do cadastro viram janelas das 8h às 18h. `disponibilidade_service.filtro_sql` é a regra única usada no agendamento e no filtro de disponibilidade da busca; o reagendamento pelo próprio profissional não passa por ela.
 - `AUDITORIA`: `USUARIO_ID` (sem FK, sobrevive à exclusão), `ACAO`, `ENTIDADE`, `ENTIDADE_ID`, `IP`, `CRIADO_EM`. `services/auditoria_service.py`: `auditar(cur, ...)` grava na transação da ação (rollback leva junto) e `auditar_avulso` usa transação própria (falha de login). Ações em `ACOES`: `LOGIN`, `LOGIN_FALHA`, `PRONTUARIO_ACESSO`, `SESSAO_AGENDADA`, `SESSAO_ALTERADA`, `ENCAMINHAMENTO_CRIADO`, `SENHA_ALTERADA`, `EMAIL_ALTERADO`. O IP vem de `IP_ATUAL` (contextvar), preenchido no `before_request` do `app.py` com o último `X-Forwarded-For` (o proxy do Northflank). Testes que disparam essas ações apagam as linhas criadas.
@@ -90,7 +90,7 @@ Valores enumerados são `DOMAIN`s com `CHECK`; a validação das rotas espelha e
 
 ## Fluxos principais
 
-**Autenticação.** `POST /api/auth/login` confere bcrypt e `ativo`, gera JWT HS256 com `{id_usuario, usuario_role}` e grava no cookie `access_token` (`httponly`, `secure`, `SameSite=None`). Os decorators decodificam o cookie e passam o payload como primeiro argumento da rota. Cadastro e "esqueci a senha" gravam `USUARIO.codigo` e mandam e-mail em thread (`enviar_email_codigo_async`).
+**Autenticação.** `POST /api/auth/login` confere bcrypt e `ativo`, gera JWT HS256 com `{id_usuario, usuario_role, iat, exp}` (8h) e grava no cookie `access_token` (`httponly`, `secure`, `SameSite=None`, `max_age` 8h). Os decorators e os dois WebSockets passam por `auth_service.usuario_do_token`, que recusa token sem `exp`, vencido, de usuário inativo ou com `iat` anterior a `USUARIO.SENHA_ALTERADA_EM` (UTC); o payload vira o primeiro argumento da rota. Toda troca de senha grava `SENHA_ALTERADA_EM` e derruba os tokens antigos; `alterar_senha_logado` devolve cookie novo. Cadastro e "esqueci a senha" gravam `USUARIO.codigo` e mandam e-mail em thread (`enviar_email_codigo_async`). O código de recuperação expira em 15 min (`CODIGO_EXPIRA_EM`), o de ativação não expira (não há reenvio; um código de "esqueci a senha" também ativa). Na 5ª falha (`CODIGO_TENTATIVAS`) o código é apagado.
 
 **Pool de conexões (`database/db.py`).** `LifoQueue` de até 10 conexões `fdb`. `get_connection()` reaproveita uma livre (testa com `SELECT 1 FROM RDB$DATABASE`, descarta se morta) ou abre nova. `ConexaoDoPool.close()` faz **rollback** e devolve ao pool, então toda rota precisa de `commit()` explícito e de `close()` no `finally`.
 
@@ -125,9 +125,9 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 
 - Checkup de segurança de 19/10/2026 em `plans/ultima-sprint.md` (seção 2, achados S1–S23). Os mais graves:
   - Repo **público** com a senha SMTP do Gmail hard-coded em `services/email_service.py` (`enviar_email`) e com o `BANCO.FDB`, que tem dados reais.
-  - Código de ativação/recuperação sem expiração nem limite de tentativas: força bruta toma qualquer conta pelo e-mail.
-  - O JWT não tem `exp`: o token vale até a troca do `SECRET_KEY`.
-  - `GET /api/encaminhamentos` lista os encaminhamentos de todos os profissionais.
+  - ~~Código sem expiração nem limite de tentativas~~: resolvido (S3). Sem rate limit (S11), pedir códigos novos ainda permite tentar 5 por e-mail enviado.
+  - ~~JWT sem `exp`~~: resolvido (S4). Logout ainda não revoga o token no servidor (refresh token e sessões ficam para a feature 10).
+  - ~~`GET /api/encaminhamentos` lista os de todos os profissionais~~: resolvido (S5/S6).
   - ~~WebSocket sem checagem de `Origin`~~: resolvido (S7), `origem_permitida()` recusa `Origin` fora de `ORIGENS_FRONT`; sem `Origin` (app mobile) passa e depende do token.
 - `dias_atendimento` é validado no cadastro de profissional, mas não é gravado: não existe modelo de agenda.
 - O estado das salas em memória impede escalar horizontalmente sem um broker (ex.: Redis pub/sub).

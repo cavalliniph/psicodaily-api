@@ -1,11 +1,12 @@
-# S3 (codigo com validade e tentativas), S4 (token com exp e invalidado pela troca de senha).
+# S3 (codigo com validade e tentativas), S4 (token com exp e invalidado pela troca de senha), S5 e S6 (encaminhamentos).
 import time as relogio
+from datetime import date, datetime, time, timedelta
 
 import jwt
 import pytest
 
 import config
-from apoio import PACIENTE, checar, executar
+from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, PSIQUIATRA, checar, executar
 from services import auth_service
 
 
@@ -75,3 +76,35 @@ def test_token_vencido_ou_sem_exp(anonimo):
     sem_exp = jwt.encode({'id_usuario': PACIENTE, 'usuario_role': 'PACIENTE'}, config.SECRET_KEY, algorithm='HS256')
     checar(anonimo.get('/api/usuarios/me', headers={'Authorization': 'Bearer ' + sem_exp}), 401, 'error')
 
+
+@pytest.fixture
+def sessao_com_paciente(paciente, agenda_vazia, sessoes):
+    inicio = datetime.combine(date.today() + timedelta(days=3), time(15))
+    corpo = {'id_profissional': PROFISSIONAL, 'timestamp_inicio': inicio.isoformat(),
+             'timestamp_fim': (inicio + timedelta(hours=1)).isoformat()}
+    sessoes.append(checar(paciente.post('/api/consultas/', json=corpo), 201, 'sessao')['sessao']['sessao_id'])
+
+
+def test_encaminhamento_valida_campos_e_vinculo(profissional, sessao_com_paciente, encaminhamentos):
+    def criar(**corpo):
+        return profissional.post('/api/encaminhamentos/', json={'id_usuario': PACIENTE, 'motivo': 'Avaliar', **corpo})
+
+    checar(criar(extra=1), 400, 'error')
+    checar(criar(id_usuario=str(PACIENTE)), 400, 'error')
+    checar(criar(motivo=' '), 400, 'error')
+    checar(criar(motivo='x' * 2001), 400, 'error')
+    checar(criar(id_cid='abc'), 400, 'error')
+    checar(criar(id_usuario=OUTRO_PACIENTE), 404, 'error')  # sem sessao com este profissional
+    checar(criar(id_usuario=PROFISSIONAL), 404, 'error')
+    encam = checar(criar(id_cid=' f32.1 '), 201, 'encaminhamento')['encaminhamento']
+    encaminhamentos.append(encam['encaminhamento_id'])
+    assert encam['cid'] == 'F32.1', encam
+
+
+def test_profissional_so_lista_os_proprios(profissional, psiquiatra, encaminhamentos):
+    eid = executar("""INSERT INTO ENCAMINHAMENTO (PACIENTE_ID, PSICOLOGO_ID, MOTIVO) VALUES (?, ?, 'outro')
+        RETURNING ENCAMINHAMENTO_ID""", (PACIENTE, PSIQUIATRA))[0][0]
+    encaminhamentos.append(eid)
+    ids = lambda c: [e['encaminhamento_id'] for e in checar(c.get('/api/encaminhamentos/'), 200)['encaminhamentos']]
+    assert eid not in ids(profissional)
+    assert eid in ids(psiquiatra)

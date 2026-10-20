@@ -20,5 +20,5 @@ def criar_encaminhamento(payload):
 def encaminhamentos(payload):
     return jsonify({
         'message': 'Encaminhamentos obtidos com sucesso',
-        'encaminhamentos': encaminhamentos_service.listar()
+        'encaminhamentos': encaminhamentos_service.listar(payload['id_usuario'])
     }), 200
