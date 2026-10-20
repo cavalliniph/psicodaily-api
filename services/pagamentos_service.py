@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from database.db import transacao
+from services import notificacoes_service
 from services.erros import ErroNegocio
 
 ARKHE_BASE_URL = os.getenv(
@@ -69,10 +70,18 @@ def criar_cobranca(paciente_id, papel, sessao_id):
             WHERE SESSAO_ID = ? AND PACIENTE_ID = ?
         ''', (sessao_id, paciente_id))
         sessao = cur.fetchone()
+        cur.execute('SELECT ID_COBRANCA_ARKHE, STATUS FROM PAGAMENTO WHERE SESSAO_ID = ? ORDER BY PAGAMENTO_ID DESC',
+                    (sessao_id,))
+        pagamentos = cur.fetchall()
     if sessao is None:
         raise ErroNegocio('Sessao nao encontrada', 404)
     if sessao[0] == 'CANCELADO':
         raise ErroNegocio('Nao e possivel pagar uma sessao cancelada')
+    if any(status == 'PAGO' for _, status in pagamentos):
+        raise ErroNegocio('Esta sessao ja foi paga', 409)
+    if pagamentos:
+        # Reaproveita o Pix pendente: duas cobrancas abertas deixariam o paciente pagar duas vezes
+        return consultar_cobranca(paciente_id, pagamentos[0][0])
 
     status, resposta = _arkhe_request(
         'POST',
@@ -89,16 +98,46 @@ def criar_cobranca(paciente_id, papel, sessao_id):
         valor_retornado = Decimal("NaN")
     if not valor_retornado.is_finite() or valor_retornado * 100 != Decimal(str(sessao[1])):
         raise ErroNegocio('Arkhé retornou um valor invalido', 502)
+    if not isinstance(resposta.get('id_cobranca'), int):
+        raise ErroNegocio('Arkhé retornou uma cobranca sem id', 502)
+
+    with transacao() as cur:
+        cur.execute('INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, VALOR_CENTAVOS) VALUES (?, ?, ?)',
+                    (sessao_id, resposta['id_cobranca'], sessao[1]))
     return resposta
 
 
-def consultar_cobranca(id_cobranca):
+def consultar_cobranca(usuario_id, id_cobranca):
+    with transacao() as cur:
+        cur.execute('''SELECT p.STATUS, s.SESSAO_ID, s.PROFISSIONAL_ID, s.DATA_HORA_INICIO
+            FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID
+            WHERE p.ID_COBRANCA_ARKHE = ? AND ? IN (s.PACIENTE_ID, s.PROFISSIONAL_ID)''', (id_cobranca, usuario_id))
+        pagamento = cur.fetchone()
+    if pagamento is None:
+        raise ErroNegocio('Cobranca nao encontrada', 404)
+
     status, resposta = _arkhe_request('GET', f'/api/v1/cobrancas/pix/{id_cobranca}')
     if status >= 400:
         raise ErroNegocio('Arkhé nao consultou a cobranca', 502, detalhes=resposta)
     if resposta.get('status') not in (0, 1):
         raise ErroNegocio('Arkhé retornou status de pagamento desconhecido', 502)
+    if resposta['status'] == 1 and pagamento[0] == 'PENDENTE':
+        _confirmar(id_cobranca, *pagamento[1:])
     return resposta
+
+
+def _confirmar(id_cobranca, sessao_id, profissional_id, inicio):
+    # shortcut: o status so muda quando alguem consulta a cobranca; webhook ou job (F7) se a Arkhé tiver
+    with transacao() as cur:
+        cur.execute('''UPDATE PAGAMENTO SET STATUS = 'PAGO', PAGO_EM = CURRENT_TIMESTAMP
+            WHERE ID_COBRANCA_ARKHE = ? AND STATUS = 'PENDENTE' RETURNING PAGAMENTO_ID''', (id_cobranca,))
+        if cur.fetchone()[0] is None:
+            return  # outra requisicao confirmou antes
+        cur.execute("UPDATE SESSAO SET STATUS = 'CONFIRMADO' WHERE SESSAO_ID = ? AND STATUS = 'AGENDADO'", (sessao_id,))
+        emails = [notificacoes_service.notificar(
+            cur, profissional_id, 'PAGAMENTO_CONFIRMADO', 'Pagamento confirmado',
+            f'O paciente pagou a sessão de {inicio.strftime("%d/%m/%Y às %H:%M")}.', {'sessao_id': sessao_id})]
+    notificacoes_service.enviar_emails(emails)
 
 
 def financeiro(papel, dias):

@@ -15,7 +15,7 @@ def test_so_admin_acessa(rota, anonimo, paciente, profissional, admin):
 
 
 def test_metricas_do_periodo(admin, sessoes):
-    # Uma sessao REALIZADO ontem com avaliacao entra no faturamento, na contagem e na media
+    # Uma sessao REALIZADO ontem, paga e avaliada, entra no faturamento, na contagem e na media
     assert admin.get('/api/admin/metricas?dias=15').status_code == 400
     antes = admin.get('/api/admin/metricas?dias=7').get_json()
     assert set(antes['consultas_por_status']) == {'AGENDADO', 'CONFIRMADO', 'REALIZADO', 'CANCELADO'}, antes
@@ -25,6 +25,8 @@ def test_metricas_do_periodo(admin, sessoes):
         VALUES (?, ?, ?, ?, 'REALIZADO', 12345) RETURNING SESSAO_ID''', (PACIENTE, PROFISSIONAL, ontem, ontem + timedelta(hours=1)))[0][0]
     sessoes.append(sid)
     executar('INSERT INTO AVALIACAO (SESSAO_ID, PACIENTE_ID, PROFISSIONAL_ID, NOTA) VALUES (?, ?, ?, 5)', (sid, PACIENTE, PROFISSIONAL))
+    executar('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, VALOR_CENTAVOS, STATUS, PAGO_EM)
+        VALUES (?, ?, 12345, 'PAGO', ?)''', (sid, 900000000 + sid, ontem))
 
     r = admin.get('/api/admin/metricas?dias=7')
     assert r.status_code == 200 and r.headers['Cache-Control'] == 'private, no-store'

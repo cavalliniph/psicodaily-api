@@ -20,7 +20,7 @@ def criar_cobranca(payload):
 @pagamentos_bp.route('/cobranca/<int:id_cobranca>', methods=['GET'])
 @usuario_autenticado
 def consultar_cobranca(payload, id_cobranca):
-    return jsonify({'cobranca': pagamentos_service.consultar_cobranca(id_cobranca)}), 200
+    return jsonify({'cobranca': pagamentos_service.consultar_cobranca(payload.get('id_usuario'), id_cobranca)}), 200
 
 
 @pagamentos_bp.route('/financeiro', methods=['GET'])

@@ -21,9 +21,11 @@ def metricas(dias):
 
     with transacao() as cur:
         # Sessoes pela data em que acontecem; sessoes futuras ficam fora do periodo
-        cur.execute('''SELECT STATUS, COUNT(*), SUM(VALOR_CENTAVOS) FROM SESSAO
+        cur.execute('''SELECT STATUS, COUNT(*) FROM SESSAO
             WHERE DATA_HORA_INICIO >= ? AND DATA_HORA_INICIO < ? GROUP BY STATUS''', (de, ate))
         sessoes = cur.fetchall()
+        cur.execute("SELECT SUM(VALOR_CENTAVOS) FROM PAGAMENTO WHERE STATUS = 'PAGO' AND PAGO_EM >= ? AND PAGO_EM < ?", (de, ate))
+        faturamento = cur.fetchone()[0]
         cur.execute('SELECT USUARIO_ROLE, COUNT(*) FROM USUARIO WHERE ATIVO = TRUE GROUP BY USUARIO_ROLE')
         ativos = cur.fetchall()
         cur.execute('SELECT USUARIO_ROLE, COUNT(*) FROM USUARIO WHERE CRIADO_EM >= ? GROUP BY USUARIO_ROLE', (de,))
@@ -31,13 +33,11 @@ def metricas(dias):
         cur.execute('SELECT AVG(CAST(NOTA AS NUMERIC(5,2))), COUNT(*) FROM AVALIACAO WHERE CRIADO_EM >= ?', (de,))
         media, avaliacoes = cur.fetchone()
 
-    # shortcut: faturamento = soma das sessoes REALIZADO; trocar pela tabela PAGAMENTO quando a F2 existir
-    faturamento = next((soma for status, _, soma in sessoes if status == 'REALIZADO'), 0)
     return {
         'dias': int(dias),
         'data_inicio': inicio.isoformat(),
         'faturamento_centavos': faturamento or 0,
-        'consultas_por_status': _contagem(STATUS_SESSAO, [(status, total) for status, total, _ in sessoes]),
+        'consultas_por_status': _contagem(STATUS_SESSAO, sessoes),
         'usuarios_ativos': _contagem(PAPEIS, ativos),
         'novos_cadastros': _contagem(PAPEIS, novos),
         'avaliacao': {'media': round(float(media), 1) if media is not None else None, 'total': avaliacoes},
