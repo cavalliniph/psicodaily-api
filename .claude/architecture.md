@@ -51,7 +51,8 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 |---|---|---|
 | `/api/auth` | `POST login`, `login_mobile`, `verificar_codigo`, `esqueci_senha`, `alterar_senha`, `alterar_senha_logado`, `logout` | público / logado |
 | `/api/usuarios` | `GET/PUT/PATCH /me`, `GET /`, `POST /` (cadastro paciente), `POST /logout` | logado / público |
-| `/api/profissionais` | `GET /` (filtros `nome`, `especialidade`, `tipo_conselho`, `preco_min/max`, `disponibilidade_inicio/fim`, `abordagem`, `modalidade`, `avaliacao_min`), `GET /<id>`, `POST /` (cadastro), `PATCH /me` (descrição, preço e os campos opcionais do perfil; `null`/vazio limpa). Cada profissional vem com `especialidade`, `abordagem`, `modalidade`, `formacao`, `ano_inicio_atuacao`, `anos_experiencia` (calculado), `idiomas` e `areas_atuacao` (listas, `[]` se vazio), `video_url` (embed), `avaliacao` (média com 1 casa ou `null`) e `total_avaliacoes` | público / profissional |
+| `/api/conteudos` | `POST /`, `PATCH /<id>`, `DELETE /<id>`: artigos do próprio profissional (`titulo` 3–200, `corpo` até 20000, texto ou Markdown, tag HTML recusada). Conteúdo de outro dono dá 404 | profissional |
+| `/api/profissionais` | `GET /` (filtros `nome`, `especialidade`, `tipo_conselho`, `preco_min/max`, `disponibilidade_inicio/fim`, `abordagem`, `modalidade`, `avaliacao_min`), `GET /<id>`, `GET /<id>/conteudos` (artigos do profissional, mais recentes primeiro), `POST /` (cadastro), `PATCH /me` (descrição, preço e os campos opcionais do perfil; `null`/vazio limpa). Cada profissional vem com `especialidade`, `abordagem`, `modalidade`, `formacao`, `ano_inicio_atuacao`, `anos_experiencia` (calculado), `idiomas` e `areas_atuacao` (listas, `[]` se vazio), `video_url` (embed), `avaliacao` (média com 1 casa ou `null`) e `total_avaliacoes` | público / profissional |
 | `/api/registros` | `GET/POST /` (diário, paginação `limite`/`antes`), `GET /evolucao?dias=7\|30\|90` (`resumo` + `evolucaoHumor`, mesmo cálculo e formato do prontuário) | só paciente, próprios registros |
 | `/api/consultas` | `GET /` (inclui `nota_avaliacao`), `POST /` (agendar), `PATCH /<sessao_id>` (horário, link, status), `POST /<sessao_id>/avaliacao` (nota 1–5 e comentário; só paciente, sessão `REALIZADO`, uma vez) | logado |
 | `/api/prontuario` | `GET /<paciente_id>?dias=7\|30\|90` | profissional com sessão não cancelada com o paciente |
@@ -66,6 +67,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 - `REGISTRO`: diário do paciente (humor, sono, alimentação, exercício, anotação BLOB).
 - `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`.
 - `SESSAO`: consulta paciente × profissional; `STATUS` `AGENDADO/CONFIRMADO/REALIZADO/CANCELADO`, `VALOR_CENTAVOS` inteiro, FK opcional para encaminhamento e conversa.
+- `CONTEUDO`: artigos do profissional (`TITULO`, `CORPO` BLOB UTF8, `PUBLICADO_EM`, `ATUALIZADO_EM`), apagados junto com o profissional.
 - `AVALIACAO`: nota 1–5 e comentário do paciente por sessão (`UQ_AVALIACAO_SESSAO`); a busca junta a média por profissional numa tabela derivada (`ORIGEM_PROFISSIONAL` em `services/profissionais_service.py`).
 - `CONVERSA`, `CONVERSA_PARTICIPANTE`, `CONVERSA_MENSAGEM`: existem no schema, sem rotas ainda.
 

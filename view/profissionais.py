@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from services import profissionais_service
+from services import conteudos_service, profissionais_service
 from util.usuarios import profissional_autenticado
 
 prof_bp = Blueprint('profissionais', __name__, url_prefix='/api/profissionais')
@@ -13,6 +13,11 @@ def profissionais():
 @prof_bp.route('/<int:id>', methods=['GET'])
 def profissional(id):
 	return jsonify({'message': 'Profissionais obtidos com sucesso', 'profissionais': profissionais_service.detalhe(id)}), 200
+
+
+@prof_bp.route('/<int:id>/conteudos', methods=['GET'])
+def conteudos(id):
+	return jsonify({'conteudos': conteudos_service.listar(id)}), 200
 
 
 @prof_bp.route('/', methods=['POST'])

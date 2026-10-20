@@ -12,6 +12,7 @@ from view.profissionais import prof_bp
 from view.consultas import cons_bp
 from view.encaminhamentos import encam_bp
 from view.pagamentos import pagamentos_bp
+from view.conteudos import conteudos_bp
 from flask_cors import CORS
 # from pathlib import Path
 
@@ -34,6 +35,7 @@ app.register_blueprint(prof_bp)
 app.register_blueprint(cons_bp)
 app.register_blueprint(encam_bp)
 app.register_blueprint(pagamentos_bp)
+app.register_blueprint(conteudos_bp)
 
 app.config.from_pyfile("config.py")
 
