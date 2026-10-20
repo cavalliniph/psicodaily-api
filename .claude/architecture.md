@@ -59,11 +59,12 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/prontuario` | `GET /<paciente_id>?dias=7\|30\|90` | profissional com sessão não cancelada com o paciente |
 | `/api/encaminhamentos` | `GET /`, `POST /` | profissional |
 | `/api/pagamentos` | `POST /cobranca`, `GET /cobranca/<id>`, `GET /financeiro` | paciente (cobrança) / logado |
+| `/api/admin` | `GET /metricas?dias=7\|30\|90\|365` (`faturamento_centavos` = soma das sessões `REALIZADO` até a F2, `consultas_por_status` pela data da sessão, `usuarios_ativos` e `novos_cadastros` por papel, `avaliacao` `{media, total}`), `GET /auditoria?usuario_id=&acao=&limite=&antes=` (mais recentes primeiro, `proximo_cursor`) | admin (`@admin_autenticado`) |
 | `/ws/signaling?sessao_id=` | WebSocket WebRTC: repassa `offer`/`answer`/`ice-candidate` e emite `peers`, `peer-joined`, `peer-left` | participantes da sessão |
 
 ## Modelo de dados (`database/migrations/`)
 
-- `USUARIO`: base de todos (role, CPF, senha bcrypt, `codigo` de 6 dígitos para ativação/recuperação, `ativo`).
+- `USUARIO`: base de todos (role `PACIENTE/PSICOLOGO/PSIQUIATRA/ADMIN`, CPF, senha bcrypt, `codigo` de 6 dígitos para ativação/recuperação, `ativo`, `CRIADO_EM`, `NULL` para quem se cadastrou antes da migration 0009). Não há rota que crie ADMIN: promover com `UPDATE USUARIO SET USUARIO_ROLE = 'ADMIN'` e novo login (o papel vai no token).
 - `PROFISSIONAL`: 1:1 com usuário (`USUARIO_ID`), conselho CRP/CRM, preço, dias de atendimento, `ABORDAGEM` (lista `ABORDAGENS` em `funcao.py`) e `MODALIDADE` (`dm_modalidade`: `ONLINE/PRESENCIAL/AMBAS`). O filtro de modalidade inclui sempre `AMBAS`. Perfil completo, todos opcionais: `FORMACAO`, `ANO_INICIO_ATUACAO` (guarda o ano, não os anos, para não envelhecer), `IDIOMAS` e `AREAS_ATUACAO` (nomes canônicos de `IDIOMAS`/`AREAS_ATUACAO` em `funcao.py`, separados por vírgula; até 8 áreas) e `VIDEO_URL` (só YouTube/Vimeo, gravado já como URL de embed `youtube-nocookie.com/embed/<id>` ou `player.vimeo.com/video/<id>`). Os campos opcionais ficam em `CAMPOS_OPCIONAIS` (`services/profissionais_service.py`): incluir um campo novo é uma linha ali, mais a coluna.
 - `REGISTRO`: diário do paciente (humor, sono, alimentação, exercício, anotação BLOB).
 - `ENCAMINHAMENTO`: paciente → profissional, status `ATIVO/CONCLUIDO/CANCELADO`.
@@ -118,7 +119,6 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
   - O JWT não tem `exp`: o token vale até a troca do `SECRET_KEY`.
   - `GET /api/encaminhamentos` lista os encaminhamentos de todos os profissionais.
   - WebSocket sem checagem de `Origin` (cookie `SameSite=None`).
-- `dm_role` não inclui `ADMIN`, embora `usuarios.py` e `consultas.py` testem esse papel.
 - `dias_atendimento` é validado no cadastro de profissional, mas não é gravado: não existe modelo de agenda.
 - O estado das salas em memória impede escalar horizontalmente sem um broker (ex.: Redis pub/sub).
 - O `BANCO.FDB` saiu do git em 19/10/2026, mas continua no histórico público até um `git filter-repo` ou até o repo ficar privado. Mudança de schema é sempre uma migration nova.

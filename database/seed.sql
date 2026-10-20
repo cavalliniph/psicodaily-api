@@ -1,5 +1,5 @@
 -- Dados FICTICIOS para dev e CI: python database/migrar.py --criar --seed database/seed.sql
--- Nunca rodar em producao. Os testes de tests/ usam os IDs 22 (psicologo), 23 e 25 (pacientes).
+-- Nunca rodar em producao. Os testes de tests/ usam os IDs 22 (psicologo), 23 e 25 (pacientes); 26 e o admin.
 -- Senha de todos: Senha@123. CPFs validos, mas inventados.
 -- Restricoes dos testes: nenhum outro profissional com abordagem TCC nem com avaliacao.
 
@@ -14,6 +14,9 @@ INSERT INTO USUARIO (ID_USUARIO, EMAIL, NOME, TELEFONE, CPF, USUARIO_ROLE, SENHA
      '$2b$12$Oz027XjyKjGC2AvSZOPAveDGnzmfkNpja7zVMBdTmTAC.o/EiCUfa', TRUE);
 INSERT INTO USUARIO (ID_USUARIO, EMAIL, NOME, TELEFONE, CPF, USUARIO_ROLE, SENHA, ATIVO) VALUES
     (25, 'outro.paciente@exemplo.com', 'Daniel Paciente Teste', '(11) 94444-4444', '02654235114', 'PACIENTE',
+     '$2b$12$Oz027XjyKjGC2AvSZOPAveDGnzmfkNpja7zVMBdTmTAC.o/EiCUfa', TRUE);
+INSERT INTO USUARIO (ID_USUARIO, EMAIL, NOME, TELEFONE, CPF, USUARIO_ROLE, SENHA, ATIVO) VALUES
+    (26, 'admin.teste@exemplo.com', 'Eva Admin Teste', '(11) 95555-5555', '31748265946', 'ADMIN',
      '$2b$12$Oz027XjyKjGC2AvSZOPAveDGnzmfkNpja7zVMBdTmTAC.o/EiCUfa', TRUE);
 
 INSERT INTO PROFISSIONAL (USUARIO_ID, CONSELHO_TIPO, CONSELHO_NUMERO, ESPECIALIDADE, PRECO_HORA, DESCRICAO) VALUES

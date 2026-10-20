@@ -15,6 +15,7 @@ from view.encaminhamentos import encam_bp
 from view.pagamentos import pagamentos_bp
 from view.conteudos import conteudos_bp
 from view.favoritos import favoritos_bp
+from view.admin import admin_bp
 from flask_cors import CORS
 # from pathlib import Path
 
@@ -39,6 +40,7 @@ app.register_blueprint(encam_bp)
 app.register_blueprint(pagamentos_bp)
 app.register_blueprint(conteudos_bp)
 app.register_blueprint(favoritos_bp)
+app.register_blueprint(admin_bp)
 
 app.config.from_pyfile("config.py")
 

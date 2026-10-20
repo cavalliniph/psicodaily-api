@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, make_response, request
 from services import usuarios_service
-from util.usuarios import usuario_autenticado
+from util.usuarios import admin_autenticado, usuario_autenticado
 
 usuarios_bp = Blueprint("usuarios", __name__, url_prefix="/api/usuarios")
 
@@ -26,10 +26,8 @@ def atualizar_usuario(dados_usuario):
 
 
 @usuarios_bp.route("/", methods=["GET"])
-@usuario_autenticado
+@admin_autenticado
 def listar_usuarios(dados_usuario):
-    if dados_usuario.get("usuario_role") != "ADMIN":
-        return jsonify({"error": "Acesso negado"}), 403
     return _sem_cache(jsonify({"usuarios": usuarios_service.listar()}))
 
 

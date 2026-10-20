@@ -34,3 +34,14 @@ def profissional_autenticado(funcao):
         return funcao(dados, *args, **kwargs)
 
     return wrapper
+
+
+def admin_autenticado(funcao):
+    @usuario_autenticado
+    @wraps(funcao)
+    def wrapper(dados, *args, **kwargs):
+        if dados.get('usuario_role') != 'ADMIN':
+            return jsonify({ "error": "Acesso negado" }), 403
+        return funcao(dados, *args, **kwargs)
+
+    return wrapper
