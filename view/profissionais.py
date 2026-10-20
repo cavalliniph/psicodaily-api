@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from services import conteudos_service, profissionais_service
+from services import conteudos_service, disponibilidade_service, profissionais_service
 from util.usuarios import profissional_autenticado
 
 prof_bp = Blueprint('profissionais', __name__, url_prefix='/api/profissionais')
@@ -18,6 +18,25 @@ def profissional(id):
 @prof_bp.route('/<int:id>/conteudos', methods=['GET'])
 def conteudos(id):
 	return jsonify({'conteudos': conteudos_service.listar(id)}), 200
+
+
+@prof_bp.route('/<int:id>/disponibilidade', methods=['GET'])
+def disponibilidade(id):
+	return jsonify({'janelas': disponibilidade_service.listar(id)}), 200
+
+
+@prof_bp.route('/me/disponibilidade', methods=['PUT'])
+@profissional_autenticado
+def substituir_disponibilidade(dados_usuario):
+	janelas = disponibilidade_service.substituir(dados_usuario['id_usuario'], request.get_json(silent=True))
+	return jsonify({'janelas': janelas}), 200
+
+
+@prof_bp.route('/<int:id>/horarios', methods=['GET'])
+def horarios(id):
+	argumentos = request.args
+	return jsonify(disponibilidade_service.horarios_livres(
+		id, argumentos.get('de'), argumentos.get('ate'), argumentos.get('duracao'))), 200
 
 
 @prof_bp.route('/', methods=['POST'])

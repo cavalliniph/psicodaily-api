@@ -19,6 +19,7 @@ from funcao import (
 	obter_campo,
 	obter_dias_atendimento,
 )
+from services import disponibilidade_service
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 from services.usuarios_service import criar_usuario_base, enviar_ativacao
@@ -215,6 +216,9 @@ def _filtros(args):
 		)
 		"""
 		params.extend([fim, inicio])
+		na_agenda, parametros_agenda = disponibilidade_service.filtro_sql('p.USUARIO_ID', inicio, fim)
+		filtros += " AND " + na_agenda
+		params.extend(parametros_agenda)
 
 	return filtros, params, page, page_size
 
@@ -330,6 +334,7 @@ def cadastrar(formulario, imagem):
 		}
 		cur.execute(f"INSERT INTO PROFISSIONAL ({', '.join(colunas)}) VALUES ({', '.join('?' * len(colunas))})",
 					tuple(colunas.values()))
+		disponibilidade_service.gravar(cur, usuario["id_usuario"], disponibilidade_service.janelas_do_cadastro(dias_atendimento))
 	enviar_ativacao(usuario)
 
 	return {

@@ -61,7 +61,7 @@ jobs:
 
       - name: Testes
         run: |
-          for teste in test_migrar test_rotas test_profissionais test_perfil_profissional test_conteudos test_signaling test_pool; do
+          for teste in test_migrar test_rotas test_profissionais test_perfil_profissional test_conteudos test_disponibilidade test_signaling test_pool; do
             echo "::group::$teste"
             python "tests/$teste.py"
             echo "::endgroup::"

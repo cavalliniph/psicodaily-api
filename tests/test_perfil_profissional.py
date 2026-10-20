@@ -164,6 +164,11 @@ try:
     gravado = executar(f'SELECT {COLUNAS} FROM PROFISSIONAL WHERE USUARIO_ID = ?', (novo_usuario,))
     assert gravado == (None, None, None, 2010, 'Português,Inglês', 'Luto,Trauma',
                        'https://player.vimeo.com/video/76979871'), gravado
+    # Dias do cadastro viram janelas das 8h as 18h (F1); 1 = segunda
+    janelas = anonimo.get(f'/api/profissionais/{novo_usuario}/disponibilidade')
+    assert janelas.status_code == 404 or janelas.get_json()['janelas'] == [
+        {'dia_semana': 1, 'inicio': '08:00', 'fim': '18:00'}], janelas.get_json()
+    assert executar('SELECT COUNT(*) FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?', (novo_usuario,)) == (1,)
 
     print('ok: perfil completo do profissional')
 finally:
