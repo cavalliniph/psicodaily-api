@@ -19,7 +19,7 @@ from funcao import (
 	obter_campo,
 	obter_dias_atendimento,
 )
-from services import disponibilidade_service
+from services import disponibilidade_service, preferencias_service
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 from services.usuarios_service import criar_usuario_base, enviar_ativacao
@@ -411,3 +411,37 @@ def atualizar(id_profissional, formulario):
 		definicoes = ", ".join(f"{coluna} = ?" for coluna in atualizacoes)
 		cur.execute(f"UPDATE PROFISSIONAL SET {definicoes} WHERE USUARIO_ID = ?",
 					(*atualizacoes.values(), id_profissional))
+
+
+# Feature 2: pontos por resposta do questionario que o perfil atende; a avaliacao (0 a 5) desempata.
+PESOS_RECOMENDACAO = {'motivo': 3, 'abordagem': 3, 'preco': 2, 'modalidade': 2, 'idioma': 1}
+MAXIMO_RECOMENDADOS = 10
+
+
+def _pontuar(profissional, preferencias):
+	motivos = [m for m in preferencias.get('motivos', []) if m in profissional['areas_atuacao']]
+	pontos = PESOS_RECOMENDACAO['motivo'] * len(motivos)
+	if preferencias.get('abordagem') and preferencias['abordagem'] == profissional['abordagem']:
+		pontos += PESOS_RECOMENDACAO['abordagem']
+	if preferencias.get('preco_max') and profissional['preco_centavos'] <= preferencias['preco_max']:
+		pontos += PESOS_RECOMENDACAO['preco']
+	modalidade = preferencias.get('modalidade')
+	# Como na busca: quem atende nos dois formatos serve para qualquer preferencia
+	if modalidade and (modalidade == profissional['modalidade'] or 'AMBAS' in (modalidade, profissional['modalidade'])):
+		pontos += PESOS_RECOMENDACAO['modalidade']
+	if preferencias.get('idioma') in profissional['idiomas']:
+		pontos += PESOS_RECOMENDACAO['idioma']
+	return pontos + (profissional['avaliacao'] or 0) / 5
+
+
+def recomendados(paciente_id, papel):
+	preferencias = preferencias_service.obter(paciente_id, papel)['preferencias']
+	with transacao() as cur:
+		# ponytail: pontua todos os ativos em Python; filtro SQL antes se o cadastro passar de alguns milhares
+		cur.execute("SELECT" + COLUNAS_PROFISSIONAL + ORIGEM_PROFISSIONAL + " WHERE u.ATIVO = TRUE")
+		colunas = [desc[0].lower() for desc in cur.description]
+		profissionais = [serializar_profissional(colunas, linha) for linha in cur.fetchall()]
+	for profissional in profissionais:
+		profissional['pontuacao'] = round(_pontuar(profissional, preferencias or {}), 2)
+	profissionais.sort(key=lambda p: (-p['pontuacao'], p['id_usuario']))
+	return {'questionario_respondido': preferencias is not None, 'profissionais': profissionais[:MAXIMO_RECOMENDADOS]}

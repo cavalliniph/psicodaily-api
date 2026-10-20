@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, make_response, request
-from services import usuarios_service
+from services import preferencias_service, usuarios_service
 from util.usuarios import admin_autenticado, usuario_autenticado
 
 usuarios_bp = Blueprint("usuarios", __name__, url_prefix="/api/usuarios")
@@ -23,6 +23,19 @@ def atualizar_usuario(dados_usuario):
     usuarios_service.atualizar_perfil(dados_usuario.get("id_usuario"), formulario,
                                       request.files.get("imagem"), request.method == "PUT")
     return _sem_cache(jsonify({"message": "Perfil atualizado"}))
+
+
+@usuarios_bp.route("/me/preferencias", methods=["GET"])
+@usuario_autenticado
+def preferencias(dados_usuario):
+    return _sem_cache(jsonify(preferencias_service.obter(dados_usuario.get("id_usuario"), dados_usuario.get("usuario_role"))))
+
+
+@usuarios_bp.route("/me/preferencias", methods=["PUT"])
+@usuario_autenticado
+def salvar_preferencias(dados_usuario):
+    return _sem_cache(jsonify(preferencias_service.salvar(dados_usuario.get("id_usuario"), dados_usuario.get("usuario_role"),
+                                                          request.get_json(silent=True))))
 
 
 @usuarios_bp.route("/", methods=["GET"])

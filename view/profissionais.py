@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from services import conteudos_service, disponibilidade_service, profissionais_service
-from util.usuarios import profissional_autenticado
+from util.usuarios import profissional_autenticado, usuario_autenticado
 
 prof_bp = Blueprint('profissionais', __name__, url_prefix='/api/profissionais')
 
@@ -8,6 +8,14 @@ prof_bp = Blueprint('profissionais', __name__, url_prefix='/api/profissionais')
 @prof_bp.route('/', methods=['GET'])
 def profissionais():
 	return jsonify({'message': 'Profissionais obtidos com sucesso', **profissionais_service.buscar(request.args)}), 200
+
+
+@prof_bp.route('/recomendados', methods=['GET'])
+@usuario_autenticado
+def recomendados(dados_usuario):
+	resposta = jsonify(profissionais_service.recomendados(dados_usuario['id_usuario'], dados_usuario.get('usuario_role')))
+	resposta.headers['Cache-Control'] = 'private, no-store'
+	return resposta
 
 
 @prof_bp.route('/<int:id>', methods=['GET'])
