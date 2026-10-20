@@ -112,45 +112,9 @@ grep -l "from flask import" services/*.py   # vazio (flask_bcrypt pode)
 
 ---
 
-## 2. Checkup de segurança
+## 2. Segurança (adiada)
 
-Leitura completa de `app.py`, `funcao.py`, `util/`, `database/db.py`, `services/`, `view/*`, Dockerfile e entrypoint em 19/10/2026.
-**Sem SQL injection**: toda query usa `?`, e as colunas dinâmicas (`UPDATE ... SET {definicoes}`) vêm de listas fixas no código.
-
-### Achados
-
-| # | Sev. | Onde | Problema | Correção |
-|---|---|---|---|---|
-| S1 | Crítica | `services/email_service.py::enviar_email` | Senha SMTP do Gmail no código, em repo público | Item 0.1 + `SMTP_USER`/`SMTP_PASSWORD` no `.env` |
-| S2 | Crítica | `database/BANCO.FDB`, `usuarios/*.jpg` | Dados pessoais e de saúde reais no repo público | Item 0.2 |
-| S3 | ~~Alta~~ | `auth.py` `alterar_senha`, `verificar_codigo` | Código de 6 dígitos **sem expiração nem limite de tentativas**: dá para disparar `esqueci_senha` e testar 10⁶ códigos em `alterar_senha`, tomando qualquer conta pelo e-mail | **Feito** (20/10/2026): migration `0015_seguranca_auth`; recuperação expira em 15 min, ativação sem validade (não há reenvio), 5ª falha apaga o código, `compare_digest` |
-| S4 | ~~Alta~~ | `services/auth_service.py::gerar_token` | JWT **sem `exp`**: token roubado vale para sempre; logout, troca de senha e desativação não o invalidam | **Feito** (20/10/2026): `exp` 8h + `iat`, `auth_service.usuario_do_token` nos decorators e nos WS (recusa token sem `exp`, usuário inativo e `iat` < `SENHA_ALTERADA_EM`); troca logada devolve cookie novo. No deploy, todo mundo precisa logar de novo |
-| S5 | ~~Alta~~ | `encaminhamentos_service.listar` | `GET /api/encaminhamentos/` devolve **todos** os encaminhamentos (CID e motivo) de todos os profissionais | **Feito** (20/10/2026): só os do próprio profissional |
-| S6 | ~~Média~~ | `encaminhamentos.py` POST | Qualquer profissional cria encaminhamento para qualquer `id_usuario`; não valida se é paciente, nem tipo e tamanho de `motivo`/`id_cid`; aceita campos extras | **Feito** (20/10/2026): vínculo + papel `PACIENTE` (404 único), campos permitidos, `motivo` até 2000, `id_cid` no formato CID-10 |
-| S7 | ~~Média~~ | `signaling.py` | **Cross-site WebSocket hijacking**: o cookie é `SameSite=None` e o handshake WS não passa por CORS. Um site malicioso aberto pelo participante na janela da sessão entra na sala e lê SDP/ICE (IP real) | **Feito** (20/10/2026): `config.ORIGENS_FRONT` + `origem_permitida()` no signaling e no chat |
-| S8 | ~~Média~~ | `pagamentos_service.consultar_cobranca` | `GET /cobranca/<id>`: qualquer usuário logado consulta qualquer cobrança da Arkhé (IDOR) | **Feito** com a F2 (20/10/2026) |
-| S9 | Média | `pagamentos_service.financeiro` | `GET /financeiro`: todo profissional vê saldo e extrato da conta PJ inteira da plataforma | Resolvido pela feature 32 (financeiro por profissional); até lá, restringir a `ADMIN` |
-| S10 | Média | `app.py` | Sem `MAX_CONTENT_LENGTH`: upload e corpo de qualquer tamanho; `Image.open` sem limite de pixels (decompression bomb) | `MAX_CONTENT_LENGTH = 5 MB`; `Image.MAX_IMAGE_PIXELS = 25_000_000`; `Image.open(..., formats=['JPEG'])` |
-| S11 | Média | todas as rotas públicas | Sem rate limit: força bruta de login, envio em massa de e-mail (`esqueci_senha`, cadastro) e esgotamento da cota do Gmail | Contador em memória por IP+rota (cabe no processo único), ex. 10/min em `auth/*`. `ponytail:` some ao escalar para N processos |
-| S12 | Média | `consultas.py` agendar | Paciente agenda sem limite de duração nem quantidade: uma sessão de 1 ano ou 500 sessões bloqueiam a agenda do profissional | Duração entre 30 e 120 min, no máximo N sessões `AGENDADO` não pagas por paciente; fica completo com a fundação F1 |
-| S13 | ~~Média~~ | `auth.py` (antigo) | `print` do e-mail e dos códigos no log | **Feito** na fase 1 (prints removidos) |
-| S14 | Média | `docker-entrypoint.sh`, `.env` | App conecta como `SYSDBA` com senha `sysdba` | Usuário Firebird só com permissão nas tabelas da app; senha via env |
-| S15 | Baixa | `auth.py` login, `esqueci_senha` | Enumeração de usuário: 404 "não encontrado" vs 401 "senha incorreta" | Resposta única `401 Email ou senha invalidos`; `esqueci_senha` sempre 200 |
-| S16 | Baixa | `usuarios.py` PATCH `/me` | Troca de e-mail sem senha atual e sem reverificar: quem pegar um token troca o e-mail da conta e assume o "esqueci a senha" | Exigir `senha_atual` para trocar e-mail e mandar código ao novo e-mail |
-| S17 | Baixa | `app.py` CORS | `http://10.92.11.34:5173` e `localhost` liberados com credenciais em produção | Origens via env (`CORS_ORIGINS`), dev só no `.env` local |
-| S18 | Baixa | `config.py` | Sem `SECRET_KEY`, ou com o valor do `.env.example`, o app sobe e assina tokens com chave previsível | Falhar no import se a chave tiver menos de 32 caracteres |
-| S19 | Baixa | `funcao.py::validar_senha` | Senha limitada a **12** caracteres | Máximo de 64 (bcrypt aceita até 72 bytes) |
-| S20 | Baixa | `pagamentos.py` | `detalhes` repassa ao cliente a resposta crua da Arkhé | Logar o detalhe e devolver só a mensagem |
-| S21 | Baixa | `auth.py` login | `email`/`senha` não-string ou `SENHA` nula no banco geram 500 | Checar `isinstance(..., str)` |
-| S22 | Info | `upload_service.py` | Bucket R2 público (`r2.dev`): serve para foto de perfil, **não** para documentos do chat nem transcrições | Bucket privado + URL assinada (fundação F6) |
-| S23 | Info | `prontuario.py` | O profissional vê a `anotacao` de todos os registros do paciente, e o vínculo nunca expira | Aceito: a sprint não pede diário privado (ver feature 26). Rever só se o produto pedir |
-
-CSRF nas rotas JSON: baixo risco. `get_json` exige `Content-Type: application/json`, o que força preflight, e o preflight é barrado pelo CORS. Manter todas as rotas autenticadas só com JSON ou multipart via `PATCH`, nunca `POST` de formulário com cookie.
-
-### Ordem de correção
-
-S1 → S3 → S4 → S5 → S13 → S7 → S10 → S6 → S15 → S11 → S12 → S14 → resto. S8 e S9 entram junto com F2 e a feature 32.
-Cada correção leva um assert em `tests/test_seguranca.py` (ex.: 6ª tentativa de código retorna 401 mesmo com o código certo; WS com `Origin` estranho é fechado; listagem de encaminhamentos não traz o de outro profissional).
+Adiada em 20/10/2026 para focar nas entregas: achados S1–S23, ordem de correção e o que já foi feito estão em [`decisions/seguranca-adiada.md`](../decisions/seguranca-adiada.md). Volta quando o resto deste plano estiver completo.
 
 ---
 
@@ -247,7 +211,7 @@ O nome continua o mesmo, então o código não muda; as rotas leem colunas pelo 
 | F3 | **Notificações** | **Feito** (20/10/2026): migration `0010_notificacao` (com `TITULO`/`MENSAGEM` prontos para exibir), `notificar(cur, ...)` devolve o e-mail para o chamador enviar depois do commit, `GET /api/notificacoes` e `POST /api/notificacoes/lidas`. Front: sino com `nao_lidas`. Plano original: Tabela `NOTIFICACAO (USUARIO_ID, TIPO, DADOS, LIDA, CRIADO_EM)` + `notificacoes_service.notificar(usuario_id, tipo, dados)`, que grava e despacha nos canais ativos (e-mail hoje, WhatsApp/push depois). `GET /api/notificacoes` | 4, 6, 13, 14, 27, 30 |
 | F4 | **Auth para mobile** | **Feito** (20/10/2026): decorators e WS do signaling aceitam `Authorization: Bearer`. Plano original: Decorators aceitam `Authorization: Bearer` além do cookie (hoje `login_mobile` devolve o token, mas nenhuma rota lê o header). Inclui o WS do signaling | 1, 4, 23, 27 |
 | F5 | **Auditoria** | **Feito** (20/10/2026): migration `0008_auditoria`, `services/auditoria_service.py`, chamado no login, prontuário, sessões, encaminhamento, senha e e-mail. Plano original: Tabela `AUDITORIA (USUARIO_ID, ACAO, ENTIDADE, ENTIDADE_ID, IP, CRIADO_EM)` + `auditar(cur, ...)` chamado dentro dos services, na mesma transação | 20, 10, 11, 18 |
-| F6 | **Arquivos privados** | Segundo bucket R2, privado, com URL assinada de curta duração (`generate_presigned_url` do boto3, já instalado) | 11, 19 |
+| F6 | **Arquivos privados** | **Feito** (20/10/2026): bucket `psicodaily-objects` (`R2_BUCKET_PRIVADO`), `upload_service.enviar_privado` e `url_assinada` (5 min). Plano original: Segundo bucket R2, privado, com URL assinada de curta duração (`generate_presigned_url` do boto3, já instalado) | 11, 19 |
 | F7 | **Jobs periódicos** | Thread daemon iniciada no `app.py` que roda a cada minuto (lembretes, lista de espera, reconciliação de pagamento). Cabe no processo único. Um cron job do Northflank não montaria o volume do banco (F0), então teria que chamar uma rota interna da API em vez de abrir o `.FDB` | 6, 30 |
 | F8 | **Papel ADMIN** | **Feito** (20/10/2026): migration `0009_papel_admin` (domínio com `ADMIN` + `USUARIO.CRIADO_EM`), `admin_autenticado` (também em `GET /api/usuarios/`), admin fictício 26 no seed. Promover em produção por `UPDATE`. Plano original: `dm_role` não tem `ADMIN`, mas `usuarios.py` e `consultas.py` já checam esse papel. `ALTER DOMAIN` + decorator `admin_autenticado` | 25, S9 |
 
@@ -291,7 +255,7 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 | # | Tarefa | Backend | Esf. |
 |---|---|---|---|
 | 18 | Chat seguro paciente × profissional | **Feito** (20/10/2026): migration `0014_mensagem` (tabela nova; `CONVERSA*` do baseline sem uso), `/api/chat` (REST para enviar e histórico) + `/ws/chat`, que empurra as mensagens novas. Fora: criptografia em repouso, auditoria por mensagem. Front: tela de conversas ouvindo o `/ws/chat` e buscando com `depois` ao reconectar. Plano original: Usar `CONVERSA*` (corrigir o schema, ver seção 3). Só abre conversa quem tem vínculo (sessão não cancelada). REST para histórico paginado + WS `/ws/chat` (mesmo esquema do signaling: memória, processo único, checagem de `Origin` de S7). Auditar a abertura (F5). **?** Criptografar `MENSAGEM` em repouso | G |
-| 19 | Arquivos pelo chat | F6: upload para o bucket privado com tipo (PDF, JPG, PNG) e tamanho (10 MB) validados; mensagem guarda a chave, e o download gera URL assinada após checar o participante | M |
+| 19 | Arquivos pelo chat | **Feito** (20/10/2026): migration `0016_mensagem_arquivo`, `POST /api/chat/<outro_id>/arquivo` (multipart, tipo pelos primeiros bytes, legenda opcional) e `GET /api/chat/arquivo/<mensagem_id>` (URL assinada só para participantes). Front: botão de anexo, mostrar `mensagem.arquivo` e abrir a `url` ao clicar. Plano original: F6: upload para o bucket privado com tipo (PDF, JPG, PNG) e tamanho (10 MB) validados; mensagem guarda a chave, e o download gera URL assinada após checar o participante | M |
 | 30 | WhatsApp: confirmações, lembretes, cancelamentos, alterações | **? Provedor**: Meta Cloud API (oficial, exige templates aprovados) ou Z-API/Twilio. `services/whatsapp_service.py` vira um canal de F3. Lembretes: job F7 (24h e 1h antes). `USUARIO.ACEITA_WHATSAPP` (opt-in, LGPD) | M |
 | 13 | Link de consulta, comprovante e pagamento pelo WhatsApp | Eventos de F3 (`sessao_agendada`, `pagamento_confirmado`) já roteados para o canal WhatsApp de 30 | P (depois de 30) |
 | 12 / 31 | Cancelar, reagendar e agendar pelo WhatsApp | Webhook `POST /api/whatsapp/webhook` (assinatura do provedor validada). Identifica o usuário pelo telefone **verificado** (não confiar no número sem verificação). Menu por botões, sem IA no começo: listar sessões, cancelar (regras de 24), horários livres (F1). Depois pode ligar no agente (16) | G |
@@ -317,7 +281,7 @@ Esforço: **P** até 1 dia · **M** 2 a 4 dias · **G** uma semana ou mais. **?*
 
 ### Sequência sugerida
 
-1. Fase 0 → Fase 1 (refatoração). A Fase 2 (segurança) ficou para o final, a pedido do time
+1. Fase 0 → Fase 1 (refatoração). A Fase 2 (segurança) ficou para o final, a pedido do time (`decisions/seguranca-adiada.md`)
 2. Onda A: 28, 14 e 3 (feitas) → **F0 (banco persistente, migrations e CI no Northflank)** → F0.1 (texto em UTF8) → 7 (com F1), 8, F5+20, F8+25
 3. F1 agenda → 6, 29 completo; F2 → 24, 32, 17; F3 → 4/27
 4. 5 → 2; 30 → 13 → 12/31; 18 → 19

@@ -1,8 +1,10 @@
-# Feature 18: so conversa quem tem sessao nao cancelada; historico paginado, polling por `depois` e leitura.
+# Features 18 e 19: so conversa quem tem sessao nao cancelada; historico paginado, polling por `depois`, leitura e anexos.
 import json
 import time
 from datetime import datetime, timedelta
+from io import BytesIO
 
+import boto3
 import pytest
 import simple_websocket
 
@@ -113,3 +115,59 @@ def test_tempo_real(conectar, paciente, vinculo, ultima_mensagem):
         evento = json.loads(ws.receive(timeout=3))
         assert evento == {'type': 'mensagem', 'paciente_id': PACIENTE, 'profissional_id': PROFISSIONAL,
                           'mensagem': enviada}, evento
+
+
+PDF = b'%PDF-1.4\n%teste\n'
+PNG = b'\x89PNG\r\n\x1a\n' + b'0' * 16
+
+
+@pytest.fixture
+def bucket(monkeypatch):
+    """Uploads em memoria; a URL assinada e gerada de verdade, com chaves falsas (o boto3 nao chama o R2 para isso)."""
+    enviados = {}
+    servico = chat_service.upload_service
+    monkeypatch.setattr(servico, 'enviar_privado', lambda conteudo, chave, tipo: enviados.update({chave: (conteudo, tipo)}))
+    monkeypatch.setattr(servico, 's3', boto3.client('s3', endpoint_url='https://conta.r2.cloudflarestorage.com',
+                                                    aws_access_key_id='teste', aws_secret_access_key='teste',
+                                                    region_name='auto'))
+    return enviados
+
+
+def anexar(cliente, outro_id, conteudo, nome='laudo.pdf', **form):
+    return cliente.post(f'/api/chat/{outro_id}/arquivo', data={'arquivo': (BytesIO(conteudo), nome), **form},
+                        content_type='multipart/form-data')
+
+
+def test_arquivo(anonimo, paciente, outro_paciente, profissional, vinculo, ultima_mensagem, bucket):
+    assert paciente.post(f'/api/chat/{PROFISSIONAL}/arquivo', data={}, content_type='multipart/form-data').status_code == 400
+    # O tipo vem do conteudo: extensao .pdf nao basta
+    assert anexar(paciente, PROFISSIONAL, b'MZ\x90\x00 executavel', 'virus.pdf').status_code == 400
+    assert anexar(paciente, PROFISSIONAL, PDF + b'0' * chat_service.MAXIMO_ARQUIVO).status_code == 413
+    assert anexar(paciente, PROFISSIONAL, PDF, texto='x' * 2001).status_code == 400
+    assert anexar(outro_paciente, PROFISSIONAL, PDF).status_code == 404
+    assert bucket == {}
+
+    r = anexar(paciente, PROFISSIONAL, PDF, r'C:\Users\eu\Exame de sangue.pdf', texto=' segue o exame ')
+    assert r.status_code == 201, r.get_json()
+    enviada = r.get_json()['mensagem']
+    assert enviada['texto'] == 'segue o exame', enviada
+    assert enviada['arquivo'] == {'nome': 'Exame de sangue.pdf', 'tipo': 'application/pdf', 'tamanho': len(PDF)}
+    (chave, (conteudo, tipo)), = bucket.items()
+    assert chave.startswith(f'chat/{PACIENTE}-{PROFISSIONAL}/') and chave.endswith('.pdf'), chave
+    assert (conteudo, tipo) == (PDF, 'application/pdf')
+    foto = anexar(profissional, PACIENTE, PNG, 'foto.pdf').get_json()['mensagem']
+    assert foto['texto'] == '' and foto['arquivo']['tipo'] == 'image/png', foto
+    assert [m['arquivo'] for m in profissional.get(f'/api/chat/{PACIENTE}').get_json()['mensagens']] == [
+        enviada['arquivo'], foto['arquivo']]
+
+    # Download: so participantes, por URL assinada de curta duracao
+    assert anonimo.get(f'/api/chat/arquivo/{enviada["mensagem_id"]}').status_code == 401
+    assert outro_paciente.get(f'/api/chat/arquivo/{enviada["mensagem_id"]}').status_code == 404
+    texto = paciente.post(f'/api/chat/{PROFISSIONAL}', json={'texto': 'sem anexo'}).get_json()['mensagem']
+    assert paciente.get(f'/api/chat/arquivo/{texto["mensagem_id"]}').status_code == 404
+    r = profissional.get(f'/api/chat/arquivo/{enviada["mensagem_id"]}')
+    assert r.status_code == 200 and r.headers['Cache-Control'] == 'private, no-store', r.get_json()
+    corpo = r.get_json()
+    assert corpo['nome'] == 'Exame de sangue.pdf' and corpo['expira_em_segundos'] == 300, corpo
+    for trecho in (chat_service.upload_service.bucket_privado, chave, 'X-Amz-Expires=300', 'response-content-disposition='):
+        assert trecho in corpo['url'], (trecho, corpo['url'])

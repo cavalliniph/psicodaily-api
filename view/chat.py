@@ -44,6 +44,23 @@ def enviar(dados_usuario, outro_id):
     return jsonify({'mensagem': mensagem}), 201
 
 
+@chat_bp.route('/<int:outro_id>/arquivo', methods=['POST'])
+@usuario_autenticado
+def enviar_arquivo(dados_usuario, outro_id):
+    """multipart: `arquivo` (PDF, JPG ou PNG, ate 10 MB) e `texto` opcional."""
+    arquivo = request.files.get('arquivo')
+    mensagem = chat_service.enviar_arquivo(dados_usuario['id_usuario'], dados_usuario.get('usuario_role'), outro_id,
+                                           arquivo.filename if arquivo else None, arquivo,
+                                           request.form.get('texto', ''))
+    return jsonify({'mensagem': mensagem}), 201
+
+
+@chat_bp.route('/arquivo/<int:mensagem_id>', methods=['GET'])
+@usuario_autenticado
+def baixar_arquivo(dados_usuario, mensagem_id):
+    return _sem_cache(jsonify(chat_service.url_do_arquivo(dados_usuario['id_usuario'], mensagem_id)))
+
+
 @sock.route('/ws/chat')
 def tempo_real(ws):
     """Recebe {"type": "mensagem", "paciente_id", "profissional_id", "mensagem"} de toda conversa do usuario."""

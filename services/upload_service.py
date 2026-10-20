@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from io import BytesIO
 from PIL import Image, ImageOps
+from urllib.parse import quote
 import boto3
 import os
 
@@ -20,6 +21,8 @@ class UploadService():
 		)
 		# URL publica do bucket, nao e segredo; o .env so precisa dela se o bucket mudar
 		self.url_publica = os.getenv('R2_PUBLIC_URL', 'https://pub-b6945a8ffa914112b679b4f615712e92.r2.dev').rstrip('/')
+		# F6: bucket sem acesso publico (arquivos do chat); so se le por URL assinada
+		self.bucket_privado = os.getenv('R2_BUCKET_PRIVADO', 'psicodaily-objects')
 
 	def upload_file(self, imagem, id_usuario):
 		upload_name = f"usuarios/{id_usuario}.jpg"
@@ -41,6 +44,18 @@ class UploadService():
 
 	def url_foto_usuario(self, id_usuario):
 		return f"{self.url_publica}/usuarios/{id_usuario}.jpg"
+
+	def enviar_privado(self, conteudo, chave, tipo):
+		self.s3.upload_fileobj(BytesIO(conteudo), self.bucket_privado, chave, ExtraArgs={'ContentType': tipo})
+
+	def url_assinada(self, chave, nome, tipo, segundos):
+		"""URL de download que expira; gerada localmente, sem chamar o R2."""
+		return self.s3.generate_presigned_url('get_object', ExpiresIn=segundos, Params={
+			'Bucket': self.bucket_privado,
+			'Key': chave,
+			'ResponseContentType': tipo,
+			'ResponseContentDisposition': f"attachment; filename*=UTF-8''{quote(nome)}",
+		})
 
 	def list_objects(self):
 		res = self.s3.list_objects_v2(Bucket='psicodaily')

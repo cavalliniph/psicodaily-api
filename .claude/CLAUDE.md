@@ -6,7 +6,7 @@ PsicoDaily API: Flask backend (Portuguese codebase) for a mental-health platform
 
 ## Claude files
 
-Everything Claude-related lives in `.claude/`: this file, `architecture.md`, `skills/` (real folders, not symlinks), `skills-lock.json` and `install.cmd` (Claude Code installer for CMD). Don't create Claude docs, skills or config at the repo root or in `.agents/`. `.claude/` is excluded from the Docker image (`.dockerignore`).
+Everything Claude-related lives in `.claude/`: this file, `architecture.md`, `plans/` (sprint plans), `decisions/` (decisions and postponed work), `skills/` (real folders, not symlinks), `skills-lock.json` and `install.cmd` (Claude Code installer for CMD). Don't create Claude docs, skills or config at the repo root or in `.agents/`. `.claude/` is excluded from the Docker image (`.dockerignore`).
 
 ## Commands
 
@@ -28,7 +28,7 @@ Full map (routes, data model, flows, known risks) in [architecture.md](architect
 - `funcao.py` holds only pure validators/normalizers (password, CPF, email, phone, name, image, conselho, price, abordagem/modalidade). Check it before writing a new one. Email sending (Jinja template `templates/email_codigo.html`) is `services/email_service.py`; `criar_usuario_base` is `services/usuarios_service.py`.
 - **Video calls**: WebSocket `/ws/signaling?sessao_id=` (flask-sock), which relays WebRTC offer/answer/ICE. Rooms live **in memory** in `services/signaling_service.py`, and so do the chat connections of `/ws/chat` (`services/chat_service.py`), so the server must run as **one process** (gthread, 32 threads). Don't add workers or switch to gevent: `fdb` uses ctypes and would block the event loop.
 - **Payments**: `services/pagamentos_service.py` proxies the external Arkhé PIX API (`ARKHE_BASE_URL`, `CLIENT_ID`/`CLIENT_SECRET`) using `urllib`.
-- **Profile photos**: Cloudflare R2 via boto3 + Pillow (`services/upload_service.py`; env `ENDPOINT_URL`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `R2_PUBLIC_URL`).
+- **Files**: Cloudflare R2 via boto3 (`services/upload_service.py`; env `ENDPOINT_URL`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `R2_PUBLIC_URL`, `R2_BUCKET_PRIVADO`). Profile photos (Pillow) go to the public bucket `psicodaily`; anything sensitive (chat attachments) goes to the private bucket `psicodaily-objects` and is read only through `url_assinada` after a participant check.
 - Frontend origins live in `config.ORIGENS_FRONT`: CORS uses them and every WebSocket handshake must call `origem_permitida()` (`util/usuarios.py`). Add new frontend hosts there.
 
 ## Conventions

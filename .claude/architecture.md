@@ -14,7 +14,8 @@ psicodaily-front (Vercel / Vite :5173)
 │          database/db.py (pool)   services/upload_service   services/signaling_*   │
 └────────────────────┼────────────────────┼─────────────────────┼───────────────────┘
                      ▼                    ▼                     ▼
-            Firebird 4 (BANCO.FDB)   Cloudflare R2 (fotos)   salas em memória
+            Firebird 4 (BANCO.FDB)   Cloudflare R2 (fotos,   salas em memória
+                                     anexos privados)
                                      Arkhé (PIX)  Gmail SMTP (códigos)
 ```
 
@@ -62,7 +63,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/notificacoes` | `GET /?limite=&antes=` (`notificacoes` com `tipo`, `titulo`, `mensagem`, `dados` JSON e `lida`; `nao_lidas`; `proximo_cursor`), `POST /lidas` (`{"ids": [...]}` ou sem corpo para todas; devolve `atualizadas`) | logado, só as próprias |
 | `/api/lista-espera` | `POST /` (`id_profissional`, `inicio`, `fim` no formato do agendamento; janela futura de até 31 dias), `GET /` (entradas cuja janela não terminou, com `avisado_em`), `DELETE /<id>` | paciente |
 | `/api/dashboard` | `GET /`: `papel`, `proximas_sessoes` (até 5, `AGENDADO`/`CONFIRMADO` futuras), `nao_lidas`; paciente também `pagamentos` (últimos 5) e `favoritos`; profissional também `ganhos_mes_centavos` (`PAGAMENTO` pago no mês), `atendimentos_mes` e `pacientes` | paciente e profissional (admin usa `/api/admin/metricas`) |
-| `/api/chat` | `GET /` (conversas: todos com sessão não cancelada, com `ultima_mensagem` e `nao_lidas`), `GET /<outro_id>?limite=&antes=\|depois=` (ordem cronológica; sem cursor as últimas, `antes` histórico, `depois` polling; marca as recebidas como lidas), `POST /<outro_id>` (`{"texto"}`, 1–2000) | paciente e profissional com vínculo (senão 404) |
+| `/api/chat` | `GET /` (conversas: todos com sessão não cancelada, com `ultima_mensagem` e `nao_lidas`), `GET /<outro_id>?limite=&antes=\|depois=` (ordem cronológica; sem cursor as últimas, `antes` histórico, `depois` polling; marca as recebidas como lidas), `POST /<outro_id>` (`{"texto"}`, 1–2000), `POST /<outro_id>/arquivo` (multipart `arquivo` PDF/JPG/PNG até 10 MB, tipo pelos primeiros bytes, e `texto` opcional; 413 acima do limite), `GET /arquivo/<mensagem_id>` (`{url, nome, expira_em_segundos}`: URL assinada de 5 min, só para participantes). Toda mensagem traz `arquivo` (`{nome, tipo, tamanho}` ou `null`) | paciente e profissional com vínculo (senão 404) |
 | `/api/admin` | `GET /metricas?dias=7\|30\|90\|365` (`faturamento_centavos` = soma de `PAGAMENTO` pago no período, `consultas_por_status` pela data da sessão, `usuarios_ativos` e `novos_cadastros` por papel, `avaliacao` `{media, total}`), `GET /auditoria?usuario_id=&acao=&limite=&antes=` (mais recentes primeiro, `proximo_cursor`) | admin (`@admin_autenticado`) |
 | `/ws/chat` | WebSocket só de saída: empurra `{"type": "mensagem", paciente_id, profissional_id, mensagem}` de toda conversa do usuário (todas as abas/aparelhos). Envio e histórico seguem no REST; conexões em memória em `chat_service` (processo único) | paciente e profissional (cookie ou Bearer) |
 | `/ws/signaling?sessao_id=` | WebSocket WebRTC: repassa `offer`/`answer`/`ice-candidate` e emite `peers`, `peer-joined`, `peer-left` | participantes da sessão |
@@ -78,7 +79,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 - `AUDITORIA`: `USUARIO_ID` (sem FK, sobrevive à exclusão), `ACAO`, `ENTIDADE`, `ENTIDADE_ID`, `IP`, `CRIADO_EM`. `services/auditoria_service.py`: `auditar(cur, ...)` grava na transação da ação (rollback leva junto) e `auditar_avulso` usa transação própria (falha de login). Ações em `ACOES`: `LOGIN`, `LOGIN_FALHA`, `PRONTUARIO_ACESSO`, `SESSAO_AGENDADA`, `SESSAO_ALTERADA`, `ENCAMINHAMENTO_CRIADO`, `SENHA_ALTERADA`, `EMAIL_ALTERADO`. O IP vem de `IP_ATUAL` (contextvar), preenchido no `before_request` do `app.py` com o último `X-Forwarded-For` (o proxy do Northflank). Testes que disparam essas ações apagam as linhas criadas.
 - `NOTIFICACAO`: `USUARIO_ID`, `TIPO` (`TIPOS` em `services/notificacoes_service.py`), `TITULO`/`MENSAGEM` prontos para exibir, `DADOS` (JSON), `LIDA`. `notificar(cur, ...)` grava na transação da ação e **devolve** o e-mail: o chamador chama `enviar_emails(...)` depois do `with transacao()`, para não avisar de algo que sofreu rollback. Hoje o e-mail é o único canal.
 - `PREFERENCIA_PACIENTE`: `PACIENTE_ID` (PK), `RESPOSTAS` (JSON validado por `preferencias_service`), `ATUALIZADO_EM`.
-- `MENSAGEM`: chat; a conversa é o par `PACIENTE_ID`+`PROFISSIONAL_ID`, `REMETENTE_ID`, `TEXTO` UTF8, `LIDA`. `CONVERSA`/`CONVERSA_MENSAGEM` do baseline estão sem uso. Novas mensagens chegam pelo `/ws/chat`; ao reconectar, o front busca o que perdeu com `depois`.
+- `MENSAGEM`: chat; a conversa é o par `PACIENTE_ID`+`PROFISSIONAL_ID`, `REMETENTE_ID`, `TEXTO` UTF8 (vazio quando é só anexo), `LIDA`, `ARQUIVO_CHAVE`/`ARQUIVO_NOME`/`ARQUIVO_TIPO`/`ARQUIVO_TAMANHO` (nulos sem anexo). `CONVERSA`/`CONVERSA_MENSAGEM` do baseline estão sem uso. Novas mensagens chegam pelo `/ws/chat`; ao reconectar, o front busca o que perdeu com `depois`.
 - `PAGAMENTO`: `SESSAO_ID`, `ID_COBRANCA_ARKHE` (único), `METODO` (`PIX`), `VALOR_CENTAVOS`, `STATUS` `PENDENTE`/`PAGO`, `PAGO_EM`. Só o que passou pela API: cobranças criadas antes da migration 0012 não existem aqui.
 - `LISTA_ESPERA`: paciente, profissional, janela `INICIO_DESEJADO`–`FIM_DESEJADO`, `AVISADO_EM`. Quando o profissional cancela uma sessão futura (`consultas_service.atualizar`), `lista_espera_service.avisar_vaga` avisa a entrada mais antiga ainda não avisada cuja janela cobre o horário, exceto a do próprio paciente da sessão. Não reserva a vaga.
 - `FAVORITO`: PK `(PACIENTE_ID, PROFISSIONAL_ID)`, apagado junto com qualquer um dos dois.
@@ -104,6 +105,8 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 
 **Fotos de perfil.** Upload pelo Pillow (corrige EXIF, converte para JPEG, máx. 512×512) para o bucket R2 `psicodaily` em `usuarios/<id>.jpg`, `Cache-Control: no-cache`. A URL é derivada do ID (`url_foto_usuario`), sem coluna no banco.
 
+**Arquivos privados (F6).** Bucket R2 `psicodaily-objects` (`R2_BUCKET_PRIVADO`), sem acesso público, mesmo endpoint e token das fotos. `upload_service.enviar_privado` grava e `url_assinada` gera a URL de download (localmente, sem chamar o R2) com `Content-Disposition: attachment` e o nome original. Anexos do chat ficam em `chat/<paciente>-<profissional>/<uuid>.<ext>`; o upload acontece fora da transação, e se o `INSERT` falhar depois o objeto fica órfão. CORS do bucket: só `GET`/`HEAD` das origens do front.
+
 ## Execução e deploy
 
 - **Produção no Northflank** (combined service com build da `main`). Toda decisão de infra parte disso. Firebird não é addon do Northflank, então o banco tem que viver num volume Single Read/Write do serviço: 1 instância e alguns segundos fora do ar por deploy. Desde 19/10/2026, o banco de produção fica no volume `firebird-data`, montado em `/var/lib/firebird/data` (`DB_DATABASE=/var/lib/firebird/data/BANCO.FDB`), com backups `gbak` em `/var/lib/firebird/data/backups` e readiness probe em `/api/saude`. Snapshot de volume não está habilitado na conta, então ainda não há backup fora do volume.
@@ -123,7 +126,7 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
 
 ## Pontos de atenção
 
-- Checkup de segurança de 19/10/2026 em `plans/ultima-sprint.md` (seção 2, achados S1–S23). Os mais graves:
+- Checkup de segurança de 19/10/2026 em `decisions/seguranca-adiada.md` (achados S1–S23, adiados em 20/10/2026 até as features ficarem prontas). Os mais graves:
   - Repo **público** com a senha SMTP do Gmail hard-coded em `services/email_service.py` (`enviar_email`) e com o `BANCO.FDB`, que tem dados reais.
   - ~~Código sem expiração nem limite de tentativas~~: resolvido (S3). Sem rate limit (S11), pedir códigos novos ainda permite tentar 5 por e-mail enviado.
   - ~~JWT sem `exp`~~: resolvido (S4). Logout ainda não revoga o token no servidor (refresh token e sessões ficam para a feature 10).
