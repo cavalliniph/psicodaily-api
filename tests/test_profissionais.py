@@ -44,7 +44,8 @@ anonimo = app.test_client()
 profissional = cliente(PROFISSIONAL, 'PSICOLOGO')
 paciente = cliente(PACIENTE, 'PACIENTE')
 outro_paciente = cliente(OUTRO_PACIENTE, 'PACIENTE')
-original = executar('SELECT ABORDAGEM, MODALIDADE FROM PROFISSIONAL WHERE USUARIO_ID = ?', (PROFISSIONAL,))
+original = executar('''SELECT ABORDAGEM, MODALIDADE, IDIOMAS, AREAS_ATUACAO, ANO_INICIO_ATUACAO
+    FROM PROFISSIONAL WHERE USUARIO_ID = ?''', (PROFISSIONAL,))
 sessoes = []
 
 try:
@@ -121,6 +122,22 @@ try:
     total = anonimo.get('/api/profissionais/?avaliacao_min=4').get_json()['total']
     assert total == 1, total
 
+    # 6. Filtros avancados (feature 15): idioma, area, experiencia e ordenacao. O 24 do seed fala Ingles e custa 30000.
+    executar('''UPDATE PROFISSIONAL SET IDIOMAS = 'Português,Libras', AREAS_ATUACAO = 'Ansiedade,Luto',
+        ANO_INICIO_ATUACAO = ? WHERE USUARIO_ID = ?''', (datetime.now().year - 10, PROFISSIONAL))
+    assert PROFISSIONAL in busca('&idioma=libras')[1] and 24 not in busca('&idioma=libras')[1]
+    assert 24 in busca('&idioma=Inglês')[1] and PROFISSIONAL not in busca('&idioma=Inglês')[1]
+    assert PROFISSIONAL in busca('&area_atuacao=luto&idioma=Português')[1]
+    assert PROFISSIONAL not in busca('&area_atuacao=Trauma')[1]
+    assert PROFISSIONAL in busca('&experiencia_min=10')[1] and PROFISSIONAL not in busca('&experiencia_min=11')[1]
+    for query in ('&idioma=Klingon', '&idioma=Português,Inglês', '&area_atuacao=', '&experiencia_min=-1',
+                  '&experiencia_min=abc', '&ordenar=nome'):
+        assert busca(query)[0] == 400, query
+    ordem = list(busca('&ordenar=preco')[1])
+    assert ordem.index(PROFISSIONAL) < ordem.index(24), ordem
+    assert list(busca('&ordenar=avaliacao')[1])[0] == PROFISSIONAL
+    assert list(busca('&ordenar=experiencia')[1])[0] == PROFISSIONAL
+
     # Vazio/null limpa
     assert profissional.patch('/api/profissionais/me', json={'abordagem': '', 'modalidade': None}).status_code == 200
     p = busca()[1][PROFISSIONAL]
@@ -128,6 +145,7 @@ try:
 finally:
     for sessao in sessoes:
         executar('DELETE FROM SESSAO WHERE SESSAO_ID = ?', (sessao,))  # cascade apaga a AVALIACAO
-    executar('UPDATE PROFISSIONAL SET ABORDAGEM = ?, MODALIDADE = ? WHERE USUARIO_ID = ?', (*original, PROFISSIONAL))
+    executar('''UPDATE PROFISSIONAL SET ABORDAGEM = ?, MODALIDADE = ?, IDIOMAS = ?, AREAS_ATUACAO = ?,
+        ANO_INICIO_ATUACAO = ? WHERE USUARIO_ID = ?''', (*original, PROFISSIONAL))
 
 print('ok: filtros, campos novos e avaliacao de profissionais')

@@ -74,6 +74,13 @@ CAMPOS_OPCIONAIS = {
 }
 LISTAS = ('idiomas', 'areas_atuacao')
 
+# ordenar= da busca; o ID desempata para a paginacao ser estavel. Ano de inicio menor = mais experiencia.
+ORDENACOES = {
+	'preco': "p.PRECO_HORA, u.ID_USUARIO",
+	'avaliacao': "a.MEDIA DESC NULLS LAST, u.ID_USUARIO",
+	'experiencia': "p.ANO_INICIO_ATUACAO NULLS LAST, u.ID_USUARIO",
+}
+
 
 def _apresentar_perfil(profissional):
 	"""Colunas opcionais do banco -> formato da API: listas e anos de experiencia."""
@@ -98,7 +105,7 @@ def _especialidade(valor):
 
 
 def _filtros(args):
-	"""Valida a query string da busca e devolve (sql_from_where, params, page, page_size)."""
+	"""Valida a query string da busca e devolve (sql_from_where, params, page, page_size, order_by)."""
 	parametros: dict[str, int] = {}
 	for nome, padrao, limite in (
 		('page_size', 10, 100),
@@ -161,6 +168,28 @@ def _filtros(args):
 		if avaliacao_min is None or not 1 <= avaliacao_min <= 5:
 			raise ErroNegocio('avaliacao_min deve ser um numero entre 1 e 5')
 
+	# Filtros de lista: um nome canonico por vez, casado entre virgulas para "Ingles" nao achar parte de outro
+	listas = {}
+	for nome_arg, coluna, opcoes in (('idioma', 'p.IDIOMAS', IDIOMAS), ('area_atuacao', 'p.AREAS_ATUACAO', AREAS_ATUACAO)):
+		if nome_arg in args:
+			valor = normalizar_lista(args[nome_arg], opcoes, 1)
+			if valor is None:
+				raise ErroNegocio(f'{nome_arg} deve ser um entre: ' + ", ".join(opcoes))
+			listas[coluna] = valor
+
+	experiencia_min = None
+	if 'experiencia_min' in args:
+		try:
+			experiencia_min = int(args['experiencia_min'])
+		except ValueError:
+			experiencia_min = None
+		if experiencia_min is None or not 0 <= experiencia_min <= 80:
+			raise ErroNegocio('experiencia_min deve ser um numero inteiro de anos entre 0 e 80')
+
+	ordenar = args.get('ordenar')
+	if ordenar is not None and ordenar not in ORDENACOES:
+		raise ErroNegocio('ordenar deve ser preco, avaliacao ou experiencia')
+
 	inicio = fim = None
 	if 'disponibilidade_inicio' in args or 'disponibilidade_fim' in args:
 		if not args.get('disponibilidade_inicio') or not args.get('disponibilidade_fim'):
@@ -199,6 +228,13 @@ def _filtros(args):
 		# Sem avaliacao a media e NULL e o profissional fica de fora.
 		filtros += " AND a.MEDIA >= ?"
 		params.append(Decimal(str(avaliacao_min)))
+	for coluna, valor in listas.items():
+		filtros += f" AND (',' || {coluna} || ',') CONTAINING ?"
+		params.append(f",{valor},")
+	if experiencia_min is not None:
+		# Sem ano de inicio informado o profissional fica de fora.
+		filtros += " AND p.ANO_INICIO_ATUACAO <= ?"
+		params.append(date.today().year - experiencia_min)
 	if preco_min is not None:
 		filtros += " AND p.PRECO_HORA >= ?"
 		params.append(preco_min)
@@ -220,13 +256,13 @@ def _filtros(args):
 		filtros += " AND " + na_agenda
 		params.extend(parametros_agenda)
 
-	return filtros, params, page, page_size
+	return filtros, params, page, page_size, ORDENACOES.get(ordenar, "u.ID_USUARIO")
 
 
 def buscar(args):
-	filtros, params, page, page_size = _filtros(args)
+	filtros, params, page, page_size, ordem = _filtros(args)
 	with transacao() as cur:
-		cur.execute("SELECT FIRST ? SKIP ?" + COLUNAS_PROFISSIONAL + filtros + " ORDER BY u.ID_USUARIO",
+		cur.execute("SELECT FIRST ? SKIP ?" + COLUNAS_PROFISSIONAL + filtros + " ORDER BY " + ordem,
 					(page_size, (page - 1) * page_size, *params))
 		resultados = cur.fetchall()
 		colunas = [desc[0].lower() for desc in cur.description]
