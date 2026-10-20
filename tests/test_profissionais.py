@@ -96,8 +96,11 @@ try:
                   {'nota': 5, 'extra': 1}, {'nota': 5, 'comentario': 'x' * 501}, {'nota': 5, 'comentario': 3}):
         assert paciente.post(url, json=corpo).status_code == 400, corpo
 
-    r = paciente.post(url, json={'nota': 5, 'comentario': '  otima  '})
+    # Aspas curvas, travessao e emoji (F0.1) no comentario
+    r = paciente.post(url, json={'nota': 5, 'comentario': '  “ótima” – recomendo 😊  '})
     assert r.status_code == 201, r.get_json()
+    comentario = executar('SELECT COMENTARIO FROM AVALIACAO WHERE SESSAO_ID = ?', (realizada,))[0]
+    assert comentario == '“ótima” – recomendo 😊', comentario
     assert r.get_json()['avaliacao'] == {'sessao_id': realizada, 'nota': 5}
     assert paciente.post(url, json={'nota': 3}).status_code == 409
     assert paciente.post(f'/api/consultas/{realizada2}/avaliacao', json={'nota': 4}).status_code == 201

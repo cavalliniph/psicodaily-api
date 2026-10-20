@@ -89,7 +89,8 @@ novo_usuario = None
 
 try:
     r = profissional.patch('/api/profissionais/me', json={
-        'formacao': '  Psicologia - USP (2012); especialização em TCC  ',
+        # Aspas curvas, travessao e emoji (F0.1)
+        'formacao': '  Psicologia – USP (2012); especialização em “TCC” 😊  ',
         'ano_inicio_atuacao': 2014,
         'idiomas': ['portugues', 'Inglês', 'libras'],
         'areas_atuacao': 'ansiedade, depressao, TDAH',
@@ -97,7 +98,7 @@ try:
     })
     assert r.status_code == 200, r.get_json()
     detalhe = anonimo.get(f'/api/profissionais/{PROFISSIONAL}').get_json()['profissionais']
-    assert detalhe['formacao'] == 'Psicologia - USP (2012); especialização em TCC', detalhe
+    assert detalhe['formacao'] == 'Psicologia – USP (2012); especialização em “TCC” 😊', detalhe
     assert detalhe['ano_inicio_atuacao'] == 2014, detalhe
     assert detalhe['anos_experiencia'] == date.today().year - 2014, detalhe
     assert detalhe['idiomas'] == ['Português', 'Inglês', 'Libras'], detalhe

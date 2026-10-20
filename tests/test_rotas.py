@@ -66,7 +66,12 @@ try:
         assert chave in me, chave
     checar(paciente.patch('/api/usuarios/me', json={'role': 'ADMIN'}), 400, 'error')
     checar(paciente.patch('/api/usuarios/me', json={'nome': '1'}), 400, 'error')
-    checar(paciente.patch('/api/usuarios/me', json={'nome': me['nome']}), 200, 'message')
+    # Texto fora do Latin-1 (F0.1): letras nao latinas no nome e no e-mail gravam e voltam iguais
+    unicode = {'nome': 'Zoë Ñúñez 李', 'email': 'zoë.李@exemplo.com'}
+    checar(paciente.patch('/api/usuarios/me', json=unicode), 200, 'message')
+    lido = checar(paciente.get('/api/usuarios/me'), 200, 'usuario')['usuario']
+    assert (lido['nome'], lido['email']) == (unicode['nome'], unicode['email']), lido
+    checar(paciente.patch('/api/usuarios/me', json={'nome': me['nome'], 'email': me['email']}), 200, 'message')
     checar(paciente.get('/api/usuarios/'), 403, 'error')
     checar(anonimo.post('/api/usuarios/', data={}), 400, 'error')
     checar(anonimo.post('/api/usuarios/logout'), 200, 'message')

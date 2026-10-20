@@ -160,7 +160,7 @@ Várias tarefas da sprint dependem das mesmas peças. Construir cada uma só qua
 
 ### F0. Banco persistente, migrations e CI no Northflank
 
-**Status (19/10/2026): implantada em produção.** Banco no volume `firebird-data` (`/var/lib/firebird/data/BANCO.FDB`), baseline aplicado, entrypoint novo no ar (`6256598`), readiness probe em `/api/saude`, `BANCO.FDB` fora do git. Conferido: as contagens de usuários, sessões e registros batem entre o banco antigo e o do volume, e os dados sobreviveram a três deploys seguidos. **Pendências:** (1) backup fora do volume, porque o Northflank recusou o backup agendado ("This feature is not enabled for your account"); proposta: `gbak` diário enviado para um bucket R2 privado, por uma rota interna chamada por um cron job do Northflank ou pela thread da F7; (2) proteção da `main` no GitHub (passo 7); (3) senha forte do banco, adiada para a fase de segurança (S14).
+**Status (19/10/2026): implantada em produção.** Banco no volume `firebird-data` (`/var/lib/firebird/data/BANCO.FDB`), baseline aplicado, entrypoint novo no ar (`6256598`), readiness probe em `/api/saude`, `BANCO.FDB` fora do git. Conferido: as contagens de usuários, sessões e registros batem entre o banco antigo e o do volume, e os dados sobreviveram a três deploys seguidos. **Fora de escopo** (decisão de 19/10/2026: é um projeto de curso técnico, então nada de infra além do necessário para os dados não se perderem): backup fora do volume, proteção da `main` no GitHub e senha forte do banco. A senha volta, se der tempo, na fase de segurança (S14).
 
 Histórico da implantação, mantido como referência: O Northflank faz deploy automático da `main`, e a imagem nova não leva mais o `.FDB`: sem o volume preparado, a produção sobe sem banco (o entrypoint se recusa a criar um vazio sem `CRIAR_BANCO=1`, então o deploy falha em vez de apagar dados). Já testado:
 - todos os `tests/` num banco criado do zero (migrations + seed), localmente e contra a imagem oficial `firebirdsql/firebird:4`, como no CI;
@@ -226,6 +226,8 @@ Estado do Northflank conferido em 19/10/2026 (só leitura):
 Esforço: M (2 a 4 dias), quase tudo na implantação única.
 
 ### F0.1. Texto livre em UTF8 (logo depois da F0)
+
+**Feito (19/10/2026):** migrations `0002_texto_utf8_colunas`, `0003_texto_utf8_copia` e `0004_texto_utf8_troca` para `USUARIO.NOME`, `USUARIO.EMAIL`, `PROFISSIONAL.FORMACAO` e `AVALIACAO.COMENTARIO` (mesmo nome, posição e `NOT NULL`). Testadas no banco de dev, com cópia dos dados de produção, e num banco do zero. Os testes de rotas, perfil e avaliação gravam e leem “ ”, –, emoji e “李”, e falhavam com 500 antes das migrations.
 
 Achado ao montar o baseline: o banco tem `DEFAULT CHARACTER SET ISO8859_1`, e toda coluna `VARCHAR` sem charset explícito herda isso. Travessão (–), aspas curvas (“ ”), que o teclado do celular e o Word inserem sozinhos, emoji e letras fora do Latin-1 dão **500** (`Cannot transliterate character between character sets`). Testado em `PATCH /api/profissionais/me` com `formacao`: acento passa; travessão, aspas curvas e emoji quebram. Os BLOBs de texto (descrição, anotação, motivo) já são UTF8.
 
