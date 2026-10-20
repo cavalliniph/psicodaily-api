@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, checar, executar
+from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, app, checar, executar, gerar_token
 
 
 @pytest.fixture
@@ -40,6 +40,13 @@ def test_auth(anonimo, paciente):
     checar(paciente.post('/api/auth/alterar_senha_logado', json={}), 400, 'error')
     checar(anonimo.post('/api/auth/alterar_senha_logado', json={}), 401, 'error')
     checar(anonimo.post('/api/auth/logout'), 200, 'message')
+
+
+def test_auth_bearer(anonimo):
+    with app.app_context():
+        token = gerar_token({'id_usuario': PACIENTE, 'usuario_role': 'PACIENTE'})
+    checar(anonimo.get('/api/usuarios/me', headers={'Authorization': f'Bearer {token}'}), 200)
+    checar(anonimo.get('/api/usuarios/me', headers={'Authorization': 'Bearer lixo'}), 401, 'error')
 
 
 def test_usuarios(anonimo, paciente, nome_e_email_do_paciente):

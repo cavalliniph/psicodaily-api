@@ -5,10 +5,18 @@ import jwt
 from services.auth_service import decodificar_token
 
 
+def token_da_requisicao():
+    # Web manda o cookie; o app mobile manda "Authorization: Bearer <token>".
+    cabecalho = request.headers.get("Authorization", "")
+    if cabecalho.startswith("Bearer "):
+        return cabecalho[7:]
+    return request.cookies.get("access_token")
+
+
 def usuario_autenticado(funcao):
     @wraps(funcao)
     def wrapper(*args, **kwargs):
-        token = request.cookies.get("access_token")
+        token = token_da_requisicao()
 
         if not token:
             return jsonify({ "error": "Usuario nao autenticado" }), 401
