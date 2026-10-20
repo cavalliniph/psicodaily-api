@@ -1,30 +1,16 @@
-# Precisa do Firebird no ar: python tests/test_perfil_profissional.py
 # Perfil completo: formacao, experiencia, idiomas, areas de atuacao e video.
-# Usa o profissional 22 do banco local; desfaz tudo o que cria.
-import os
 import random
-import sys
 from datetime import date
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app import app
-from database.db import get_connection
+import pytest
+
+from apoio import PROFISSIONAL, executar
 from funcao import AREAS_ATUACAO, normalizar_ano_inicio, normalizar_lista, normalizar_video_url, validar_cpf
 from services import profissionais_service
-from services.auth_service import gerar_token
 
-PROFISSIONAL = 22
 COLUNAS = 'ABORDAGEM, MODALIDADE, FORMACAO, ANO_INICIO_ATUACAO, IDIOMAS, AREAS_ATUACAO, VIDEO_URL'
-
-
-def executar(sql, params=()):
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(sql, params)
-    linha = cur.fetchone() if cur.description else None
-    con.commit()
-    con.close()
-    return linha
+YT = 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ'
+IDIOMAS = ['Português', 'Inglês', 'Espanhol', 'Francês', 'Italiano', 'Alemão', 'Libras']
 
 
 def cpf_valido():
@@ -37,9 +23,19 @@ def cpf_valido():
             return cpf
 
 
-# 1. Validadores puros
-YT = 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ'
-for entrada, esperado in [
+@pytest.fixture
+def perfil_original():
+    original = executar(f'SELECT {COLUNAS} FROM PROFISSIONAL WHERE USUARIO_ID = ?', (PROFISSIONAL,))[0]
+    yield
+    executar(f'''UPDATE PROFISSIONAL SET {", ".join(c + " = ?" for c in COLUNAS.split(", "))}
+        WHERE USUARIO_ID = ?''', (*original, PROFISSIONAL))
+
+
+def detalhe(anonimo, id_usuario=PROFISSIONAL):
+    return anonimo.get(f'/api/profissionais/{id_usuario}').get_json()['profissionais']
+
+
+@pytest.mark.parametrize('entrada, esperado', [
     ('https://www.youtube.com/watch?v=dQw4w9WgXcQ', YT),
     ('https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s', YT),
     ('https://m.youtube.com/watch?v=dQw4w9WgXcQ', YT),
@@ -60,34 +56,27 @@ for entrada, esperado in [
     ('https://vimeo.com/76979871/<b>', None),
     ('youtu.be/dQw4w9WgXcQ', None),
     (12345, None),
-]:
-    assert normalizar_video_url(entrada) == esperado, (entrada, normalizar_video_url(entrada))
+])
+def test_normalizar_video_url(entrada, esperado):
+    assert normalizar_video_url(entrada) == esperado
 
-IDIOMAS = ['Português', 'Inglês', 'Espanhol', 'Francês', 'Italiano', 'Alemão', 'Libras']
-assert normalizar_lista(['ingles', ' LIBRAS ', 'Inglês'], IDIOMAS, 7) == 'Inglês,Libras'
-assert normalizar_lista('portugues, espanhol', IDIOMAS, 7) == 'Português,Espanhol'
-assert normalizar_lista('["Alemao"]', IDIOMAS, 7) == 'Alemão'
-assert normalizar_lista(['Klingon'], IDIOMAS, 7) is None
-assert normalizar_lista([1], IDIOMAS, 7) is None
-assert normalizar_lista({'a': 1}, IDIOMAS, 7) is None
-assert normalizar_lista('[quebrado', IDIOMAS, 7) is None
-assert normalizar_lista(AREAS_ATUACAO[:9], AREAS_ATUACAO, 8) is None
-assert normalizar_ano_inicio('2015') == 2015 and normalizar_ano_inicio(1950) == 1950
-for invalido in (1949, date.today().year + 1, '20x5', True, 2015.5, None):
-    assert normalizar_ano_inicio(invalido) is None, invalido
 
-# 2. Rotas
-with app.app_context():
-    token = gerar_token({'id_usuario': PROFISSIONAL, 'usuario_role': 'PSICOLOGO'})
-profissional = app.test_client()
-profissional.set_cookie('access_token', token)
-anonimo = app.test_client()
-original = executar(f'SELECT {COLUNAS} FROM PROFISSIONAL WHERE USUARIO_ID = ?', (PROFISSIONAL,))
-envios = []
-profissionais_service.enviar_ativacao = envios.append
-novo_usuario = None
+def test_normalizar_lista():
+    assert normalizar_lista(['ingles', ' LIBRAS ', 'Inglês'], IDIOMAS, 7) == 'Inglês,Libras'
+    assert normalizar_lista('portugues, espanhol', IDIOMAS, 7) == 'Português,Espanhol'
+    assert normalizar_lista('["Alemao"]', IDIOMAS, 7) == 'Alemão'
+    for invalido in (['Klingon'], [1], {'a': 1}, '[quebrado'):
+        assert normalizar_lista(invalido, IDIOMAS, 7) is None, invalido
+    assert normalizar_lista(AREAS_ATUACAO[:9], AREAS_ATUACAO, 8) is None
 
-try:
+
+@pytest.mark.parametrize('invalido', [1949, date.today().year + 1, '20x5', True, 2015.5, None])
+def test_normalizar_ano_inicio(invalido):
+    assert normalizar_ano_inicio('2015') == 2015 and normalizar_ano_inicio(1950) == 1950
+    assert normalizar_ano_inicio(invalido) is None
+
+
+def test_patch_preenche_e_limpa(anonimo, profissional, perfil_original):
     r = profissional.patch('/api/profissionais/me', json={
         # Aspas curvas, travessao e emoji (F0.1)
         'formacao': '  Psicologia – USP (2012); especialização em “TCC” 😊  ',
@@ -97,52 +86,69 @@ try:
         'video_url': 'https://youtu.be/dQw4w9WgXcQ',
     })
     assert r.status_code == 200, r.get_json()
-    detalhe = anonimo.get(f'/api/profissionais/{PROFISSIONAL}').get_json()['profissionais']
-    assert detalhe['formacao'] == 'Psicologia – USP (2012); especialização em “TCC” 😊', detalhe
-    assert detalhe['ano_inicio_atuacao'] == 2014, detalhe
-    assert detalhe['anos_experiencia'] == date.today().year - 2014, detalhe
-    assert detalhe['idiomas'] == ['Português', 'Inglês', 'Libras'], detalhe
-    assert detalhe['areas_atuacao'] == ['Ansiedade', 'Depressão', 'TDAH'], detalhe
-    assert detalhe['video_url'] == YT, detalhe
+    perfil = detalhe(anonimo)
+    assert perfil['formacao'] == 'Psicologia – USP (2012); especialização em “TCC” 😊', perfil
+    assert perfil['ano_inicio_atuacao'] == 2014, perfil
+    assert perfil['anos_experiencia'] == date.today().year - 2014, perfil
+    assert perfil['idiomas'] == ['Português', 'Inglês', 'Libras'], perfil
+    assert perfil['areas_atuacao'] == ['Ansiedade', 'Depressão', 'TDAH'], perfil
+    assert perfil['video_url'] == YT, perfil
 
     busca = anonimo.get('/api/profissionais/?page_size=100').get_json()['profissionais']
     na_busca = next(p for p in busca if p['id_usuario'] == PROFISSIONAL)
-    assert {k: na_busca[k] for k in detalhe} == detalhe, (na_busca, detalhe)
+    assert {k: na_busca[k] for k in perfil} == perfil, (na_busca, perfil)
     # Quem nao preencheu recebe listas vazias e null, nao chaves faltando
     outro = next((p for p in busca if p['id_usuario'] != PROFISSIONAL and not p['idiomas']), None)
     if outro:
         assert outro['areas_atuacao'] == [] and outro['anos_experiencia'] is None, outro
 
-    for corpo in (
-        {'idiomas': ['Klingon']},
-        {'idiomas': 5},
-        {'areas_atuacao': AREAS_ATUACAO[:9]},
-        {'ano_inicio_atuacao': 1900},
-        {'ano_inicio_atuacao': date.today().year + 1},
-        {'ano_inicio_atuacao': 'dois mil'},
-        {'video_url': 'https://www.instagram.com/reel/abc'},
-        {'video_url': ['https://youtu.be/dQw4w9WgXcQ']},
-        {'formacao': 'ab'},
-        {'formacao': 'x' * 1001},
-        {'campo_inventado': 1},
-    ):
-        r = profissional.patch('/api/profissionais/me', json=corpo)
-        assert r.status_code == 400 and r.get_json()['error'], (corpo, r.status_code, r.get_json())
-    # Erro nao altera nada
-    assert anonimo.get(f'/api/profissionais/{PROFISSIONAL}').get_json()['profissionais'] == detalhe
-
     # null, lista vazia ou texto vazio limpam
     r = profissional.patch('/api/profissionais/me', json={'formacao': None, 'ano_inicio_atuacao': None,
                                                          'idiomas': [], 'areas_atuacao': '', 'video_url': ' '})
     assert r.status_code == 200, r.get_json()
-    limpo = anonimo.get(f'/api/profissionais/{PROFISSIONAL}').get_json()['profissionais']
+    limpo = detalhe(anonimo)
     assert (limpo['formacao'], limpo['ano_inicio_atuacao'], limpo['anos_experiencia'], limpo['idiomas'],
             limpo['areas_atuacao'], limpo['video_url']) == (None, None, None, [], [], None), limpo
 
-    # 3. Cadastro multipart: chave repetida para lista, CSV e campos opcionais ausentes
+
+@pytest.mark.parametrize('corpo', [
+    {'idiomas': ['Klingon']},
+    {'idiomas': 5},
+    {'areas_atuacao': AREAS_ATUACAO[:9]},
+    {'ano_inicio_atuacao': 1900},
+    {'ano_inicio_atuacao': date.today().year + 1},
+    {'ano_inicio_atuacao': 'dois mil'},
+    {'video_url': 'https://www.instagram.com/reel/abc'},
+    {'video_url': ['https://youtu.be/dQw4w9WgXcQ']},
+    {'formacao': 'ab'},
+    {'formacao': 'x' * 1001},
+    {'campo_inventado': 1},
+])
+def test_patch_invalido_nao_altera_nada(anonimo, profissional, perfil_original, corpo):
+    antes = detalhe(anonimo)
+    r = profissional.patch('/api/profissionais/me', json=corpo)
+    assert r.status_code == 400 and r.get_json()['error'], (r.status_code, r.get_json())
+    assert detalhe(anonimo) == antes
+
+
+@pytest.fixture
+def envios(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(profissionais_service, 'enviar_ativacao', enviados.append)
+    return enviados
+
+
+@pytest.fixture
+def email_novo():
     email = f'teste.perfil.{random.randint(0, 10 ** 9)}@exemplo.com'
+    yield email
+    executar('DELETE FROM USUARIO WHERE EMAIL = ?', (email,))
+
+
+def test_cadastro_multipart(anonimo, envios, email_novo):
+    # Chave repetida para lista, CSV e campos opcionais ausentes
     formulario = {
-        'nome': 'Teste Perfil', 'email': email, 'telefone': '(11) 98888-7777', 'cpf': cpf_valido(),
+        'nome': 'Teste Perfil', 'email': email_novo, 'telefone': '(11) 98888-7777', 'cpf': cpf_valido(),
         'senha': 'Senha@123', 'confirmar_senha': 'Senha@123', 'especialidade': 'Psicologia',
         'crp': '06/123456', 'descricao': 'Atendimento de adultos e adolescentes.', 'valor': '150',
         'dias': 'Segunda', 'idiomas': ['Português', 'Inglês'], 'areas_atuacao': 'Luto, Trauma',
@@ -150,29 +156,22 @@ try:
     }
     invalido = anonimo.post('/api/profissionais/', data={**formulario, 'video_url': 'https://tiktok.com/x'})
     assert invalido.status_code == 400, invalido.get_json()
-    assert executar('SELECT 1 FROM USUARIO WHERE EMAIL = ?', (email,)) is None, 'cadastro invalido gravou usuario'
+    assert executar('SELECT 1 FROM USUARIO WHERE EMAIL = ?', (email_novo,)) == [], 'cadastro invalido gravou usuario'
 
     r = anonimo.post('/api/profissionais/', data=formulario)
     assert r.status_code == 201, r.get_json()
     criado = r.get_json()
     novo_usuario = criado['usuario']['id_usuario']
-    assert len(envios) == 1 and envios[0]['email'] == email, envios
+    assert len(envios) == 1 and envios[0]['email'] == email_novo, envios
     perfil = criado['profissional']
     assert perfil['idiomas'] == ['Português', 'Inglês'] and perfil['areas_atuacao'] == ['Luto', 'Trauma'], perfil
     assert perfil['anos_experiencia'] == date.today().year - 2010 and perfil['formacao'] is None, perfil
     assert perfil['video_url'] == 'https://player.vimeo.com/video/76979871', perfil
-    gravado = executar(f'SELECT {COLUNAS} FROM PROFISSIONAL WHERE USUARIO_ID = ?', (novo_usuario,))
+    gravado = executar(f'SELECT {COLUNAS} FROM PROFISSIONAL WHERE USUARIO_ID = ?', (novo_usuario,))[0]
     assert gravado == (None, None, None, 2010, 'Português,Inglês', 'Luto,Trauma',
                        'https://player.vimeo.com/video/76979871'), gravado
     # Dias do cadastro viram janelas das 8h as 18h (F1); 1 = segunda
     janelas = anonimo.get(f'/api/profissionais/{novo_usuario}/disponibilidade')
     assert janelas.status_code == 404 or janelas.get_json()['janelas'] == [
         {'dia_semana': 1, 'inicio': '08:00', 'fim': '18:00'}], janelas.get_json()
-    assert executar('SELECT COUNT(*) FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?', (novo_usuario,)) == (1,)
-
-    print('ok: perfil completo do profissional')
-finally:
-    executar(f'''UPDATE PROFISSIONAL SET {", ".join(c + " = ?" for c in COLUNAS.split(", "))}
-        WHERE USUARIO_ID = ?''', (*original, PROFISSIONAL))
-    if novo_usuario:
-        executar('DELETE FROM USUARIO WHERE ID_USUARIO = ?', (novo_usuario,))
+    assert executar('SELECT COUNT(*) FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?', (novo_usuario,)) == [(1,)]

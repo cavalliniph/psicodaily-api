@@ -1,56 +1,37 @@
-# Precisa do Firebird no ar: python tests/test_rotas.py
 # Caracterizacao das rotas (status + chaves) para a refatoracao view -> services.
-# Usa o profissional 22 e os pacientes 23 e 25 do banco local; desfaz tudo o que cria.
-import os
-import sys
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app import app
-from database.db import get_connection
-from services.auth_service import gerar_token
+import pytest
 
-PROFISSIONAL, PACIENTE, OUTRO_PACIENTE = 22, 23, 25
+from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, checar, executar
 
 
-def executar(sql, params=()):
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(sql, params)
-    linha = cur.fetchone() if cur.description else None
-    con.commit()
-    con.close()
-    return linha
+@pytest.fixture
+def registros():
+    criados = []
+    yield criados
+    for registro_id in criados:
+        executar('DELETE FROM REGISTRO WHERE REGISTRO_ID = ?', (registro_id,))
 
 
-def cliente(id_usuario, papel):
-    c = app.test_client()
-    with app.app_context():
-        c.set_cookie('access_token', gerar_token({'id_usuario': id_usuario, 'usuario_role': papel}))
-    return c
+@pytest.fixture
+def nome_e_email_do_paciente():
+    original = executar('SELECT NOME, EMAIL FROM USUARIO WHERE ID_USUARIO = ?', (PACIENTE,))[0]
+    yield original
+    executar('UPDATE USUARIO SET NOME = ?, EMAIL = ? WHERE ID_USUARIO = ?', (*original, PACIENTE))
 
 
-def checar(resposta, status, *chaves):
-    corpo = resposta.get_json(silent=True) or {}
-    assert resposta.status_code == status, (resposta.request.path, resposta.status_code, corpo)
-    for chave in chaves:
-        assert chave in corpo, (resposta.request.path, chave, corpo)
-    return corpo
+def criar_registro(paciente, registros, humor, sono):
+    registro = checar(paciente.post('/api/registros/', json={'humor': humor, 'qualidade_sono': sono}), 201, 'registro')['registro']
+    registros.append(registro['registro_id'])
+    return registro
 
 
-anonimo = app.test_client()
-profissional = cliente(PROFISSIONAL, 'PSICOLOGO')
-paciente = cliente(PACIENTE, 'PACIENTE')
-outro = cliente(OUTRO_PACIENTE, 'PACIENTE')
-amanha = (datetime.now() + timedelta(days=400)).replace(hour=10, minute=0, second=0, microsecond=0)
-criados = {'SESSAO': [], 'REGISTRO': [], 'ENCAMINHAMENTO': []}
-ultima_auditoria = executar('SELECT COALESCE(MAX(AUDITORIA_ID), 0) FROM AUDITORIA')[0]
-
-try:
-    # saude (readiness probe)
+def test_saude(anonimo):
     assert checar(anonimo.get('/api/saude'), 200, 'status')['status'] == 'ok'
 
-    # auth
+
+def test_auth(anonimo, paciente):
     checar(anonimo.post('/api/auth/login', json={}), 400, 'error')
     checar(anonimo.post('/api/auth/login', json={'email': 'naoexiste@x.com', 'senha': 'a'}), 404, 'error')
     checar(anonimo.post('/api/auth/verificar_codigo', json={}), 400, 'error')
@@ -60,7 +41,8 @@ try:
     checar(anonimo.post('/api/auth/alterar_senha_logado', json={}), 401, 'error')
     checar(anonimo.post('/api/auth/logout'), 200, 'message')
 
-    # usuarios
+
+def test_usuarios(anonimo, paciente, nome_e_email_do_paciente):
     checar(anonimo.get('/api/usuarios/me'), 401, 'error')
     me = checar(paciente.get('/api/usuarios/me'), 200, 'usuario')['usuario']
     for chave in ('id_usuario', 'nome', 'email', 'tipo_usuario', 'telefone', 'cpf', 'foto_url'):
@@ -72,12 +54,12 @@ try:
     checar(paciente.patch('/api/usuarios/me', json=unicode), 200, 'message')
     lido = checar(paciente.get('/api/usuarios/me'), 200, 'usuario')['usuario']
     assert (lido['nome'], lido['email']) == (unicode['nome'], unicode['email']), lido
-    checar(paciente.patch('/api/usuarios/me', json={'nome': me['nome'], 'email': me['email']}), 200, 'message')
     checar(paciente.get('/api/usuarios/'), 403, 'error')
     checar(anonimo.post('/api/usuarios/', data={}), 400, 'error')
     checar(anonimo.post('/api/usuarios/logout'), 200, 'message')
 
-    # profissionais
+
+def test_profissionais(anonimo, paciente, profissional):
     lista = checar(anonimo.get('/api/profissionais/'), 200, 'page', 'page_size', 'total', 'total_pages', 'profissionais')
     assert lista['profissionais'], lista
     checar(anonimo.get('/api/profissionais/?page=0'), 400, 'error')
@@ -88,7 +70,8 @@ try:
     checar(paciente.patch('/api/profissionais/me', json={'descricao': 'x' * 20}), 403, 'error')
     checar(profissional.patch('/api/profissionais/me', json={'foo': 1}), 400, 'error')
 
-    # registros
+
+def test_registros_e_evolucao(paciente, profissional, registros):
     checar(profissional.get('/api/registros/'), 403, 'error')
     checar(paciente.get('/api/registros/?limite=0'), 400, 'error')
     checar(paciente.get('/api/registros/'), 200, 'registros', 'proximo_cursor')
@@ -104,15 +87,19 @@ try:
         return corpo['resumo']['totalRegistros'], dia['valor'] * dia['quantidade'], dia['quantidade']
 
     total_antes, soma_antes, qtd_antes = humor_de_hoje()
-    registro = checar(paciente.post('/api/registros/', json={'humor': 'BOM', 'qualidade_sono': 'BOA'}), 201, 'registro')['registro']
-    criados['REGISTRO'].append(registro['registro_id'])
+    registro = criar_registro(paciente, registros, 'BOM', 'BOA')
     assert registro['usuario_id'] == PACIENTE and registro['humor'] == 'BOM', registro
-    ruim = checar(paciente.post('/api/registros/', json={'humor': 'RUIM', 'qualidade_sono': 'RUIM'}), 201, 'registro')['registro']
-    criados['REGISTRO'].append(ruim['registro_id'])
+    criar_registro(paciente, registros, 'RUIM', 'RUIM')
     # BOM vale 4 e RUIM vale 2: a media do dia passa a incluir os dois
     total, soma, qtd = humor_de_hoje()
     assert (total, qtd) == (total_antes + 2, qtd_antes + 2), (total, qtd, total_antes, qtd_antes)
     assert abs(soma - (soma_antes + 6)) < 1e-9, (soma, soma_antes)
+
+
+def test_consultas_prontuario_e_encaminhamentos(anonimo, paciente, outro_paciente, profissional,
+                                                sessoes, registros, encaminhamentos):
+    registro = criar_registro(paciente, registros, 'BOM', 'BOA')
+    daqui_400_dias = (datetime.now() + timedelta(days=400)).replace(hour=10, minute=0, second=0, microsecond=0)
 
     # consultas
     checar(anonimo.get('/api/consultas/'), 401, 'error')
@@ -120,15 +107,15 @@ try:
     checar(paciente.post('/api/consultas/', json={}), 400, 'error')
     checar(paciente.post('/api/consultas/', json={'id_profissional': PROFISSIONAL,
                                                  'timestamp_inicio': 'x', 'timestamp_fim': 'y'}), 400, 'error')
-    corpo = {'id_profissional': PROFISSIONAL, 'timestamp_inicio': amanha.isoformat(),
-             'timestamp_fim': (amanha + timedelta(hours=1)).isoformat()}
+    corpo = {'id_profissional': PROFISSIONAL, 'timestamp_inicio': daqui_400_dias.isoformat(),
+             'timestamp_fim': (daqui_400_dias + timedelta(hours=1)).isoformat()}
     checar(profissional.post('/api/consultas/', json=corpo), 403, 'error')
     checar(paciente.post('/api/consultas/', json={**corpo, 'id_profissional': 999999}), 404, 'error')
     sessao = checar(paciente.post('/api/consultas/', json=corpo), 201, 'sessao')['sessao']
-    criados['SESSAO'].append(sessao['sessao_id'])
+    sessoes.append(sessao['sessao_id'])
     for chave in ('sessao_id', 'paciente_id', 'profissional_id', 'status', 'paciente_foto_url', 'profissional_foto_url'):
         assert chave in sessao, chave
-    checar(outro.post('/api/consultas/', json=corpo), 409, 'error')
+    checar(outro_paciente.post('/api/consultas/', json=corpo), 409, 'error')
     sid = sessao['sessao_id']
     checar(paciente.patch(f'/api/consultas/{sid}', json={'status': 'CANCELADO'}), 403, 'error')
     checar(profissional.patch(f'/api/consultas/{sid}', json={'foo': 1}), 400, 'error')
@@ -139,7 +126,7 @@ try:
     checar(profissional.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 403, 'error')
     checar(paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 9}), 400, 'error')
     checar(paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 409, 'error')
-    checar(outro.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 404, 'error')
+    checar(outro_paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 404, 'error')
 
     # prontuario (vinculo vem da sessao criada acima)
     checar(paciente.get(f'/api/prontuario/{PACIENTE}'), 403, 'error')
@@ -159,9 +146,10 @@ try:
     checar(profissional.post('/api/encaminhamentos/', json={'id_usuario': 999999, 'motivo': 'x'}), 404, 'error')
     encam = checar(profissional.post('/api/encaminhamentos/', json={'id_usuario': PACIENTE, 'motivo': 'teste'}),
                    201, 'encaminhamento')['encaminhamento']
-    criados['ENCAMINHAMENTO'].append(encam['encaminhamento_id'])
+    encaminhamentos.append(encam['encaminhamento_id'])
 
-    # pagamentos (so os caminhos que nao chamam a Arkhe)
+
+def test_pagamentos_sem_chamar_a_arkhe(anonimo, paciente, profissional):
     checar(anonimo.post('/api/pagamentos/cobranca', json={}), 401, 'error')
     checar(profissional.post('/api/pagamentos/cobranca', json={}), 403, 'error')
     checar(paciente.post('/api/pagamentos/cobranca', json={}), 400, 'error')
@@ -169,11 +157,3 @@ try:
     checar(paciente.get('/api/pagamentos/financeiro'), 403, 'error')
     checar(profissional.get('/api/pagamentos/financeiro?dias=2'), 400, 'error')
     checar(anonimo.get('/api/pagamentos/cobranca/1'), 401, 'error')
-
-    print('ok: rotas caracterizadas')
-finally:
-    for tabela, ids in criados.items():
-        coluna = {'SESSAO': 'SESSAO_ID', 'REGISTRO': 'REGISTRO_ID', 'ENCAMINHAMENTO': 'ENCAMINHAMENTO_ID'}[tabela]
-        for id_ in ids:
-            executar(f'DELETE FROM {tabela} WHERE {coluna} = ?', (id_,))
-    executar('DELETE FROM AUDITORIA WHERE AUDITORIA_ID > ?', (ultima_auditoria,))

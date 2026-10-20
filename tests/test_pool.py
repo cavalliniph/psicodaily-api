@@ -1,10 +1,6 @@
-# Precisa do Firebird no ar: python tests/test_pool.py
-import os
-import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.db import _livres, get_connection
 
 
@@ -26,24 +22,30 @@ def rajada(n=10):
     return max(tempos)
 
 
-rajada()  # aquece o pool
-assert _livres.qsize() == 10, _livres.qsize()
-pior = rajada()
-assert pior < 0.5, f"rajada com pool quente demorou {pior:.3f}s"
+def test_rajada_com_pool_quente():
+    # Aquece com 10 conexoes abertas ao mesmo tempo: numa rajada, uma thread rapida devolve
+    # a conexao antes de outra pedir, e o pool fica com menos de 10 se ja havia alguma livre
+    conexoes = [get_connection() for _ in range(10)]
+    for con in conexoes:
+        con.close()
+    assert _livres.qsize() == 10, _livres.qsize()
+    pior = rajada()
+    assert pior < 0.5, f"rajada com pool quente demorou {pior:.3f}s"
 
-# Conexao morta no pool e trocada por uma nova, sem erro para a rota
-_livres.queue[-1].close()
-con = get_connection()
-cur = con.cursor()
-cur.execute("SELECT 1 FROM RDB$DATABASE")
-assert cur.fetchone() == (1,)
-con.close()
 
-# O que a rota nao commitou e descartado ao devolver
-con = get_connection()
-cur = con.cursor()
-cur.execute("UPDATE USUARIO SET NOME = NOME WHERE 1 = 0")
-con.close()
-assert not _livres.queue[-1].main_transaction.active
+def test_conexao_morta_e_trocada():
+    get_connection().close()
+    _livres.queue[-1].close()
+    con = get_connection()
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM RDB$DATABASE")
+    assert cur.fetchone() == (1,)
+    con.close()
 
-print(f"ok: pior tempo da rajada com pool quente {pior:.3f}s")
+
+def test_devolver_descarta_o_que_nao_foi_commitado():
+    con = get_connection()
+    cur = con.cursor()
+    cur.execute("UPDATE USUARIO SET NOME = NOME WHERE 1 = 0")
+    con.close()
+    assert not _livres.queue[-1].main_transaction.active

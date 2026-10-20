@@ -1,47 +1,62 @@
-# Precisa do Firebird no ar: python tests/test_signaling.py
 # Sobe o app numa porta local e conecta clientes WebSocket como o front.
-# Usa o profissional 22 e os pacientes 23 e 25 do banco local; desfaz tudo o que cria.
 import json
-import os
-import sys
 import threading
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
 import simple_websocket
 from werkzeug.serving import make_server
 
+from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, executar
 from app import app
-from database.db import get_connection
 from services import consultas_service
 from services.auth_service import gerar_token
 
-PROFISSIONAL, PACIENTE, OUTRO_PACIENTE = 22, 23, 25
 PORTA = 5057
 
 
-def executar(sql, params=()):
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute(sql, params)
-    linha = cur.fetchone() if cur.description else None
-    con.commit()
-    con.close()
-    return linha
+@pytest.fixture(scope='module')
+def servidor():
+    servidor = make_server('127.0.0.1', PORTA, app, threaded=True)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    yield
+    servidor.shutdown()
 
 
-def nova_sessao(inicio, fim):
-    return executar('''INSERT INTO SESSAO (PACIENTE_ID, PROFISSIONAL_ID, DATA_HORA_INICIO, DATA_HORA_FIM,
+@pytest.fixture
+def emails(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(consultas_service.email_service, 'enviar_email_async',
+                        lambda destino, assunto, corpo: enviados.append((destino, assunto, corpo)))
+    return enviados
+
+
+@pytest.fixture
+def conectar(servidor):
+    clientes = []
+
+    def abrir(id_usuario, papel, sessao_id):
+        token = gerar_token({'id_usuario': id_usuario, 'usuario_role': papel})
+        ws = simple_websocket.Client.connect(f'ws://127.0.0.1:{PORTA}/ws/signaling?sessao_id={sessao_id}',
+                                             headers={'Cookie': f'access_token={token}'})
+        clientes.append(ws)
+        return ws
+
+    yield abrir
+    # Cliente aberto segura o processo: fecha todos para uma falha terminar o teste
+    for ws in clientes:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
+def nova_sessao(sessoes, inicio, fim):
+    sessao_id = executar('''INSERT INTO SESSAO (PACIENTE_ID, PROFISSIONAL_ID, DATA_HORA_INICIO, DATA_HORA_FIM,
         STATUS, VALOR_CENTAVOS) VALUES (?, ?, ?, ?, 'AGENDADO', 100) RETURNING SESSAO_ID''',
-                    (PACIENTE, PROFISSIONAL, inicio, fim))[0]
-
-
-def conectar(id_usuario, papel, sessao_id):
-    token = gerar_token({'id_usuario': id_usuario, 'usuario_role': papel})
-    ws = simple_websocket.Client.connect(f'ws://127.0.0.1:{PORTA}/ws/signaling?sessao_id={sessao_id}',
-                                         headers={'Cookie': f'access_token={token}'})
-    clientes.append(ws)
-    return ws
+                         (PACIENTE, PROFISSIONAL, inicio, fim))[0][0]
+    sessoes.append(sessao_id)
+    return sessao_id
 
 
 def receber(ws):
@@ -57,20 +72,11 @@ def fechado_pelo_servidor(ws):
         return True
 
 
-emails = []
-clientes = []
-consultas_service.email_service.enviar_email_async = lambda destino, assunto, corpo: emails.append((destino, assunto, corpo))
-
-servidor = make_server('127.0.0.1', PORTA, app, threaded=True)
-threading.Thread(target=servidor.serve_forever, daemon=True).start()
-agora = datetime.now().replace(second=0, microsecond=0)
-sessoes = []
-
-try:
-    sessao = nova_sessao(agora - timedelta(minutes=5), agora + timedelta(minutes=50))
-    futura = nova_sessao(agora + timedelta(days=1), agora + timedelta(days=1, hours=1))
-    sessoes += [sessao, futura]
-    email_profissional = executar('SELECT EMAIL FROM USUARIO WHERE ID_USUARIO = ?', (PROFISSIONAL,))[0]
+def test_presenca_aviso_por_email_e_repasse(conectar, emails, sessoes):
+    agora = datetime.now().replace(second=0, microsecond=0)
+    sessao = nova_sessao(sessoes, agora - timedelta(minutes=5), agora + timedelta(minutes=50))
+    futura = nova_sessao(sessoes, agora + timedelta(days=1), agora + timedelta(days=1, hours=1))
+    email_profissional = executar('SELECT EMAIL FROM USUARIO WHERE ID_USUARIO = ?', (PROFISSIONAL,))[0][0]
 
     # Quem nao participa ou chega fora da janela e desconectado
     assert fechado_pelo_servidor(conectar(OUTRO_PACIENTE, 'PACIENTE', sessao))
@@ -113,15 +119,3 @@ try:
     saiu = receber(paciente)
     assert saiu['type'] == 'peer-left' and saiu['id_usuario'] == PROFISSIONAL, saiu
     paciente.close()
-
-    print('ok: presenca na sala, aviso por e-mail e repasse do signaling')
-finally:
-    # Cliente aberto segura o processo: fecha todos para uma falha terminar o teste
-    for ws in clientes:
-        try:
-            ws.close()
-        except Exception:
-            pass
-    for sessao_id in sessoes:
-        executar('DELETE FROM SESSAO WHERE SESSAO_ID = ?', (sessao_id,))
-    servidor.shutdown()

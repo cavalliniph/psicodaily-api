@@ -30,7 +30,7 @@ psicodaily-front (Vercel / Vite :5173)
 | `services/` | Um `<dominio>_service.py` por blueprint (`auth`, `usuarios`, `registros`, `prontuario`, `profissionais`, `consultas`, `encaminhamentos`, `pagamentos`) com regras e SQL; `email_service` (SMTP + Jinja); `erros.py` (`ErroNegocio`); `upload_service` (R2 via boto3 + Pillow) e `signaling_service` (salas WebRTC). |
 | `database/` | `db.py` (pool, `transacao()`, `banco_responde()`), `migrations/` (schema versionado; `0001_inicial.sql` é o baseline de produção), `migrar.py` (aplica as pendentes), `seed.sql` (dados fictícios de dev e CI). O `BANCO.FDB` local (gitignored) é só de dev. |
 | `templates/` | `email_codigo.html` (Jinja) para códigos de ativação/recuperação. |
-| `tests/` | Scripts com asserts (`test_rotas.py` fixa status e chaves de todas as rotas, `test_profissionais.py`, `test_pool.py`); precisam do Firebird no ar e desfazem o que criam. |
+| `tests/` | pytest (`test_rotas.py` fixa status e chaves de todas as rotas); `conftest.py` com os fixtures de cliente por papel e de limpeza, `apoio.py` com IDs do seed e helpers. Precisam do Firebird no ar e desfazem o que criam. |
 
 Não há ORM nem modelos: SQL parametrizado (`?`) direto no Firebird.
 
@@ -107,7 +107,7 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
   6. sobe o gunicorn em `:8000`.
 
   Se qualquer passo falhar, o container sai antes de receber tráfego. `GET /api/saude` é o readiness probe. `TZ=America/Sao_Paulo` (as rotas comparam com `datetime.now()` local).
-- **CI**: `.github/workflows/ci.yml` (Firebird 4 oficial em serviço, banco do zero com migrations + seed, todos os `tests/`) em todo push e PR. Não faz deploy.
+- **CI**: `.github/workflows/ci.yml` (Firebird 4 oficial em serviço, banco do zero com migrations + seed, `pytest`) em todo push e PR. Não faz deploy.
 - **Dev (WSL)**: `run.sh` sobe um gunicorn ouvindo em `127.0.0.1:8000` e `:8001`.
 - **Por que gthread e não gevent**: `fdb` chama `libfbclient` via ctypes, o que bloquearia o loop do gevent.
 
