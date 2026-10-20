@@ -6,7 +6,7 @@ Backend Flask que conecta pacientes (`PACIENTE`) a profissionais (`PSICOLOGO`, `
 
 ```
 psicodaily-front (Vercel / Vite :5173)
-        │  HTTPS + cookie access_token (JWT)      WebSocket /ws/signaling
+        │  HTTPS + cookie access_token (JWT)      WebSocket /ws/signaling, /ws/chat
         ▼                                          ▼
 ┌──────────────────── gunicorn gthread (1 processo, 32 threads) ───────────────────┐
 │ app.py ── Blueprints em view/*.py ── services/*_service.py ── funcao.py (puro)    │
@@ -22,7 +22,7 @@ psicodaily-front (Vercel / Vite :5173)
 
 | Pasta / arquivo | Papel |
 |---|---|
-| `app.py` | Cria o app, registra blueprints, `sock` (flask-sock), CORS (origens fixas) e os `errorhandler` (`ErroNegocio` → `{'error'}`; exceção inesperada → log + 500). |
+| `app.py` | Cria o app, registra blueprints, `sock` (flask-sock), CORS (`config.ORIGENS_FRONT`, as mesmas que o handshake WS aceita) e os `errorhandler` (`ErroNegocio` → `{'error'}`; exceção inesperada → log + 500). |
 | `config.py` | `SECRET_KEY` do `.env`. |
 | `view/` | Rotas HTTP/WS, uma blueprint por domínio. Só leem o `request`, chamam o service e montam a resposta. |
 | `funcao.py` | Validadores e normalizadores puros (senha, CPF, e-mail, telefone, nome, imagem, conselho, valor, abordagem, modalidade). |
@@ -64,6 +64,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 | `/api/dashboard` | `GET /`: `papel`, `proximas_sessoes` (até 5, `AGENDADO`/`CONFIRMADO` futuras), `nao_lidas`; paciente também `pagamentos` (últimos 5) e `favoritos`; profissional também `ganhos_mes_centavos` (`PAGAMENTO` pago no mês), `atendimentos_mes` e `pacientes` | paciente e profissional (admin usa `/api/admin/metricas`) |
 | `/api/chat` | `GET /` (conversas: todos com sessão não cancelada, com `ultima_mensagem` e `nao_lidas`), `GET /<outro_id>?limite=&antes=\|depois=` (ordem cronológica; sem cursor as últimas, `antes` histórico, `depois` polling; marca as recebidas como lidas), `POST /<outro_id>` (`{"texto"}`, 1–2000) | paciente e profissional com vínculo (senão 404) |
 | `/api/admin` | `GET /metricas?dias=7\|30\|90\|365` (`faturamento_centavos` = soma de `PAGAMENTO` pago no período, `consultas_por_status` pela data da sessão, `usuarios_ativos` e `novos_cadastros` por papel, `avaliacao` `{media, total}`), `GET /auditoria?usuario_id=&acao=&limite=&antes=` (mais recentes primeiro, `proximo_cursor`) | admin (`@admin_autenticado`) |
+| `/ws/chat` | WebSocket só de saída: empurra `{"type": "mensagem", paciente_id, profissional_id, mensagem}` de toda conversa do usuário (todas as abas/aparelhos). Envio e histórico seguem no REST; conexões em memória em `chat_service` (processo único) | paciente e profissional (cookie ou Bearer) |
 | `/ws/signaling?sessao_id=` | WebSocket WebRTC: repassa `offer`/`answer`/`ice-candidate` e emite `peers`, `peer-joined`, `peer-left` | participantes da sessão |
 
 ## Modelo de dados (`database/migrations/`)
@@ -77,7 +78,7 @@ Sem repositórios, DTOs ou injeção de dependência: um nível a mais, não tr�
 - `AUDITORIA`: `USUARIO_ID` (sem FK, sobrevive à exclusão), `ACAO`, `ENTIDADE`, `ENTIDADE_ID`, `IP`, `CRIADO_EM`. `services/auditoria_service.py`: `auditar(cur, ...)` grava na transação da ação (rollback leva junto) e `auditar_avulso` usa transação própria (falha de login). Ações em `ACOES`: `LOGIN`, `LOGIN_FALHA`, `PRONTUARIO_ACESSO`, `SESSAO_AGENDADA`, `SESSAO_ALTERADA`, `ENCAMINHAMENTO_CRIADO`, `SENHA_ALTERADA`, `EMAIL_ALTERADO`. O IP vem de `IP_ATUAL` (contextvar), preenchido no `before_request` do `app.py` com o último `X-Forwarded-For` (o proxy do Northflank). Testes que disparam essas ações apagam as linhas criadas.
 - `NOTIFICACAO`: `USUARIO_ID`, `TIPO` (`TIPOS` em `services/notificacoes_service.py`), `TITULO`/`MENSAGEM` prontos para exibir, `DADOS` (JSON), `LIDA`. `notificar(cur, ...)` grava na transação da ação e **devolve** o e-mail: o chamador chama `enviar_emails(...)` depois do `with transacao()`, para não avisar de algo que sofreu rollback. Hoje o e-mail é o único canal.
 - `PREFERENCIA_PACIENTE`: `PACIENTE_ID` (PK), `RESPOSTAS` (JSON validado por `preferencias_service`), `ATUALIZADO_EM`.
-- `MENSAGEM`: chat; a conversa é o par `PACIENTE_ID`+`PROFISSIONAL_ID`, `REMETENTE_ID`, `TEXTO` UTF8, `LIDA`. `CONVERSA`/`CONVERSA_MENSAGEM` do baseline estão sem uso. Sem WebSocket: o front faz polling com `depois`.
+- `MENSAGEM`: chat; a conversa é o par `PACIENTE_ID`+`PROFISSIONAL_ID`, `REMETENTE_ID`, `TEXTO` UTF8, `LIDA`. `CONVERSA`/`CONVERSA_MENSAGEM` do baseline estão sem uso. Novas mensagens chegam pelo `/ws/chat`; ao reconectar, o front busca o que perdeu com `depois`.
 - `PAGAMENTO`: `SESSAO_ID`, `ID_COBRANCA_ARKHE` (único), `METODO` (`PIX`), `VALOR_CENTAVOS`, `STATUS` `PENDENTE`/`PAGO`, `PAGO_EM`. Só o que passou pela API: cobranças criadas antes da migration 0012 não existem aqui.
 - `LISTA_ESPERA`: paciente, profissional, janela `INICIO_DESEJADO`–`FIM_DESEJADO`, `AVISADO_EM`. Quando o profissional cancela uma sessão futura (`consultas_service.atualizar`), `lista_espera_service.avisar_vaga` avisa a entrada mais antiga ainda não avisada cuja janela cobre o horário, exceto a do próprio paciente da sessão. Não reserva a vaga.
 - `FAVORITO`: PK `(PACIENTE_ID, PROFISSIONAL_ID)`, apagado junto com qualquer um dos dois.
@@ -127,7 +128,7 @@ No front, a página em uso é `TesteVideo.jsx`, que ignora os eventos de presen�
   - Código de ativação/recuperação sem expiração nem limite de tentativas: força bruta toma qualquer conta pelo e-mail.
   - O JWT não tem `exp`: o token vale até a troca do `SECRET_KEY`.
   - `GET /api/encaminhamentos` lista os encaminhamentos de todos os profissionais.
-  - WebSocket sem checagem de `Origin` (cookie `SameSite=None`).
+  - ~~WebSocket sem checagem de `Origin`~~: resolvido (S7), `origem_permitida()` recusa `Origin` fora de `ORIGENS_FRONT`; sem `Origin` (app mobile) passa e depende do token.
 - `dias_atendimento` é validado no cadastro de profissional, mas não é gravado: não existe modelo de agenda.
 - O estado das salas em memória impede escalar horizontalmente sem um broker (ex.: Redis pub/sub).
 - O `BANCO.FDB` saiu do git em 19/10/2026, mas continua no histórico público até um `git filter-repo` ou até o repo ficar privado. Mudança de schema é sempre uma migration nova.

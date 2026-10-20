@@ -1,8 +1,18 @@
+import json
+import threading
+
+from simple_websocket import ConnectionClosed
+
 from database.db import transacao
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 
 MAXIMO_TEXTO = 2000
+
+# usuario_id -> WebSockets abertos (abas e aparelhos). Em memoria, como as salas do signaling: exige processo unico.
+# ponytail: um lock para todas as conexoes e envios; por usuario se houver muitos conectados
+_conexoes = {}
+_lock = threading.Lock()
 
 
 def _colunas(papel):
@@ -80,4 +90,36 @@ def enviar(usuario_id, papel, outro_id, dados):
         paciente_id, profissional_id = _par(cur, usuario_id, papel, outro_id)
         cur.execute('''INSERT INTO MENSAGEM (PACIENTE_ID, PROFISSIONAL_ID, REMETENTE_ID, TEXTO) VALUES (?, ?, ?, ?)
             RETURNING MENSAGEM_ID, REMETENTE_ID, TEXTO, LIDA, CRIADO_EM''', (paciente_id, profissional_id, usuario_id, texto))
-        return _mensagem(*cur.fetchone())
+        mensagem = _mensagem(*cur.fetchone())
+    # Depois do commit; quem estiver desconectado ve no GET (nao_lidas / depois=)
+    _avisar((paciente_id, profissional_id), {'type': 'mensagem', 'paciente_id': paciente_id,
+                                             'profissional_id': profissional_id, 'mensagem': mensagem})
+    return mensagem
+
+
+def manter_conexao(usuario_id, papel, ws):
+    """Segura o WS do usuario ate fechar; o servidor so empurra mensagens, o cliente envia pelo POST."""
+    _colunas(papel)
+    with _lock:
+        _conexoes.setdefault(usuario_id, set()).add(ws)
+    try:
+        while ws.receive() is not None:
+            pass
+    except ConnectionClosed:
+        pass
+    finally:
+        with _lock:
+            conexoes = _conexoes.get(usuario_id, set())
+            conexoes.discard(ws)
+            if not conexoes:
+                _conexoes.pop(usuario_id, None)
+
+
+def _avisar(usuario_ids, evento):
+    texto = json.dumps(evento)
+    with _lock:
+        for ws in [ws for usuario_id in usuario_ids for ws in _conexoes.get(usuario_id, ())]:
+            try:
+                ws.send(texto)
+            except ConnectionClosed:
+                pass  # o receive() dessa conexao termina e a remove

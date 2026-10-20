@@ -1,6 +1,11 @@
+import jwt
 from flask import Blueprint, jsonify, request
+
+from extensions.websocket import sock
 from services import chat_service
-from util.usuarios import usuario_autenticado
+from services.auth_service import decodificar_token
+from services.erros import ErroNegocio
+from util.usuarios import origem_permitida, token_da_requisicao, usuario_autenticado
 
 chat_bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -38,3 +43,16 @@ def enviar(dados_usuario, outro_id):
     mensagem = chat_service.enviar(dados_usuario['id_usuario'], dados_usuario.get('usuario_role'), outro_id,
                                    request.get_json(silent=True))
     return jsonify({'mensagem': mensagem}), 201
+
+
+@sock.route('/ws/chat')
+def tempo_real(ws):
+    """Recebe {"type": "mensagem", "paciente_id", "profissional_id", "mensagem"} de toda conversa do usuario."""
+    token = token_da_requisicao()
+    try:
+        if not origem_permitida() or not token:
+            raise ErroNegocio('Conexao recusada', 401)
+        dados = decodificar_token(token)
+        chat_service.manter_conexao(dados['id_usuario'], dados.get('usuario_role'), ws)
+    except (ErroNegocio, jwt.InvalidTokenError):
+        ws.close()
