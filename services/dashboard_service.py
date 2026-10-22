@@ -23,13 +23,14 @@ def montar(usuario_id, papel):
         painel['nao_lidas'] = cur.fetchone()[0]
 
         if papel == 'PACIENTE':
-            cur.execute('''SELECT FIRST 5 p.ID_COBRANCA_ARKHE, p.SESSAO_ID, p.VALOR_CENTAVOS, p.STATUS, p.CRIADO_EM, p.PAGO_EM
+            cur.execute('''SELECT FIRST 5 p.ID_COBRANCA_ARKHE, p.METODO, p.SESSAO_ID, p.VALOR_CENTAVOS, p.STATUS,
+                    p.CRIADO_EM, p.PAGO_EM
                 FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID
                 WHERE s.PACIENTE_ID = ? ORDER BY p.PAGAMENTO_ID DESC''', (usuario_id,))
             painel['pagamentos'] = [
-                {'id_cobranca': cobranca, 'sessao_id': sessao_id, 'valor_centavos': valor, 'status': status,
-                 'criado_em': criado.isoformat(), 'pago_em': pago.isoformat() if pago else None}
-                for cobranca, sessao_id, valor, status, criado, pago in cur.fetchall()]
+                {'id_cobranca': cobranca, 'metodo': metodo, 'sessao_id': sessao_id, 'valor_centavos': valor,
+                 'status': status, 'criado_em': criado.isoformat(), 'pago_em': pago.isoformat() if pago else None}
+                for cobranca, metodo, sessao_id, valor, status, criado, pago in cur.fetchall()]
         else:
             inicio_mes = datetime.combine(date.today().replace(day=1), datetime.min.time())
             cur.execute('''SELECT SUM(p.VALOR_CENTAVOS) FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID

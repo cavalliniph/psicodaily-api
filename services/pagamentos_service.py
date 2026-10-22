@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.error import HTTPError, URLError
@@ -17,7 +18,8 @@ ARKHE_BASE_URL = os.getenv(
 ).rstrip('/')
 
 
-def _arkhe_request(method, path, body=None):
+def _arkhe_request(method, path, body=None, bruto=False):
+    """(status, corpo JSON); com bruto=True o corpo de sucesso volta em bytes (PDF do boleto)."""
     client_id = os.getenv('ARKHE_CLIENT_ID') or os.getenv('CLIENT_ID')
     client_secret = os.getenv('ARKHE_CLIENT_SECRET') or os.getenv('CLIENT_SECRET')
     if not client_id or not client_secret:
@@ -35,7 +37,9 @@ def _arkhe_request(method, path, body=None):
     req = Request(f'{ARKHE_BASE_URL}{path}', data=dados, method=method, headers=headers)
     try:
         with urlopen(req, timeout=15) as resposta:
-            status, corpo = resposta.status, json.loads(resposta.read().decode('utf-8'))
+            status, corpo = resposta.status, resposta.read()
+            if not bruto:
+                corpo = json.loads(corpo.decode('utf-8'))
     except HTTPError as erro:
         corpo = erro.read().decode('utf-8', errors='replace')
         try:
@@ -52,22 +56,86 @@ def _arkhe_request(method, path, body=None):
     except ValueError:
         raise ErroNegocio('Arkhé retornou uma resposta invalida', 503)
 
+    if bruto:
+        return status, corpo
     if not isinstance(corpo, dict):
         raise ErroNegocio('Arkhé retornou uma resposta invalida', 503)
     return status, corpo
 
 
-def criar_cobranca(paciente_id, papel, sessao_id):
+METODOS = ('PIX', 'BOLETO', 'CARTAO')
+# Pix e boleto sao cobrancas que o paciente paga depois; o cartao e uma venda, aprovada ou recusada na hora
+CAMINHOS = {'PIX': '/api/v1/cobrancas/pix', 'BOLETO': '/api/v1/cobrancas/boletos'}
+FORMATOS_CARTAO = {
+    'numero_cartao': re.compile(r'\d{16}'),
+    'validade': re.compile(r'(0[1-9]|1[0-2])/\d{4}'),
+    'cvv': re.compile(r'\d{3}'),
+    'tipo': re.compile(r'CREDITO|DEBITO'),
+}
+MAXIMO_PARCELAS = 15  # o mesmo limite da Arkhé
+
+
+def _ler_pedido(dados):
+    if not isinstance(dados, dict) or not set(dados) <= {'id_sessao', 'metodo', 'cartao'}:
+        raise ErroNegocio('Envie id_sessao, metodo (PIX, BOLETO ou CARTAO) e, se for CARTAO, cartao')
+    if not dados.get('id_sessao'):
+        raise ErroNegocio('id_sessao e obrigatorio')
+    metodo = dados.get('metodo', 'PIX')
+    if metodo not in METODOS:
+        raise ErroNegocio('metodo deve ser PIX, BOLETO ou CARTAO')
+    if (metodo == 'CARTAO') != ('cartao' in dados):
+        raise ErroNegocio('Envie cartao somente com metodo CARTAO')
+    return dados['id_sessao'], metodo, _ler_cartao(dados['cartao']) if metodo == 'CARTAO' else None
+
+
+def _ler_cartao(cartao):
+    # Os dados do cartao vao direto para a Arkhé: nao sao gravados nem auditados aqui
+    if not isinstance(cartao, dict) or not set(FORMATOS_CARTAO) <= set(cartao) <= {*FORMATOS_CARTAO, 'parcelas'}:
+        raise ErroNegocio('cartao tem numero_cartao, validade, cvv, tipo e parcelas (opcional)')
+    for campo, formato in FORMATOS_CARTAO.items():
+        if not isinstance(cartao[campo], str) or not formato.fullmatch(cartao[campo]):
+            raise ErroNegocio('Cartao invalido: numero_cartao com 16 digitos, validade MM/AAAA, '
+                              'cvv com 3 digitos e tipo CREDITO ou DEBITO')
+    parcelas = cartao.get('parcelas', 1)
+    if type(parcelas) is not int or not 1 <= parcelas <= MAXIMO_PARCELAS or (cartao['tipo'] == 'DEBITO' and parcelas != 1):
+        raise ErroNegocio(f'parcelas deve ser de 1 a {MAXIMO_PARCELAS}, e o debito e sempre em 1')
+    return {**cartao, 'parcelas': parcelas}
+
+
+def _recusa(status, resposta, mensagem):
+    """Erro da Arkhé: recusa com motivo vai ao paciente (cartao sem limite, CPF sem conta); o resto e 502."""
+    if status in (400, 404, 409):
+        raise ErroNegocio(resposta.get('mensagem') or mensagem, 402)
+    raise ErroNegocio(mensagem, 502, detalhes=resposta)
+
+
+def _conferir(resposta, campo_id, centavos):
+    try:
+        valor = Decimal(str(resposta.get('valor')))
+    except InvalidOperation:
+        valor = Decimal('NaN')
+    if not valor.is_finite() or valor * 100 != Decimal(str(centavos)):
+        raise ErroNegocio('Arkhé retornou um valor invalido', 502)
+    if not isinstance(resposta.get(campo_id), int):
+        raise ErroNegocio('Arkhé retornou uma cobranca sem id', 502)
+
+
+def _apresentar(metodo, resposta):
+    # O url_pdf da Arkhé exige as credenciais dela; o PDF sai por GET /api/pagamentos/cobranca/<id>/pdf
+    return {**{chave: valor for chave, valor in resposta.items() if chave != 'url_pdf'}, 'metodo': metodo}
+
+
+def criar_cobranca(paciente_id, papel, dados):
     if papel != 'PACIENTE':
         raise ErroNegocio('Somente pacientes podem pagar consultas', 403)
-    if not sessao_id:
-        raise ErroNegocio('id_sessao e obrigatorio')
+    sessao_id, metodo, cartao = _ler_pedido(dados)
 
     with transacao() as cur:
         cur.execute('''
-            SELECT STATUS, VALOR_CENTAVOS
-            FROM SESSAO
-            WHERE SESSAO_ID = ? AND PACIENTE_ID = ?
+            SELECT s.STATUS, s.VALOR_CENTAVOS, s.PROFISSIONAL_ID, s.DATA_HORA_INICIO, u.CPF
+            FROM SESSAO s
+            INNER JOIN USUARIO u ON u.ID_USUARIO = s.PACIENTE_ID
+            WHERE s.SESSAO_ID = ? AND s.PACIENTE_ID = ?
         ''', (sessao_id, paciente_id))
         sessao = cur.fetchone()
         cur.execute('SELECT ID_COBRANCA_ARKHE, STATUS FROM PAGAMENTO WHERE SESSAO_ID = ? ORDER BY PAGAMENTO_ID DESC',
@@ -75,69 +143,111 @@ def criar_cobranca(paciente_id, papel, sessao_id):
         pagamentos = cur.fetchall()
     if sessao is None:
         raise ErroNegocio('Sessao nao encontrada', 404)
-    if sessao[0] == 'CANCELADO':
+    status_sessao, centavos, profissional_id, inicio, cpf = sessao
+    if status_sessao == 'CANCELADO':
         raise ErroNegocio('Nao e possivel pagar uma sessao cancelada')
     if any(status == 'PAGO' for _, status in pagamentos):
         raise ErroNegocio('Esta sessao ja foi paga', 409)
-    if pagamentos:
-        # Reaproveita o Pix pendente: duas cobrancas abertas deixariam o paciente pagar duas vezes
-        return consultar_cobranca(paciente_id, pagamentos[0][0])
 
-    status, resposta = _arkhe_request(
-        'POST',
-        '/api/v1/cobrancas/pix',
-        # Arkhe recebe reais; VALOR_CENTAVOS permanece inteiro no banco.
-        {'valor': float(Decimal(str(sessao[1])) / 100)},
-    )
+    # Pendentes (sempre Pix ou boleto) podem ter sido pagos sem ninguem consultar: atualiza antes de cobrar de novo
+    pendentes = [consultar_cobranca(paciente_id, id_cobranca) for id_cobranca, _ in pagamentos]
+    if any(cobranca['status'] == 1 for cobranca in pendentes):
+        raise ErroNegocio('Esta sessao ja foi paga', 409)
+    # Reaproveita a pendente do mesmo metodo: duas iguais abertas deixariam pagar duas vezes.
+    # ponytail: outro metodo abre outra cobranca e a Arkhé nao cancela a antiga; pagar as duas vira reembolso (24)
+    mesma = next((cobranca for cobranca in pendentes if cobranca['metodo'] == metodo), None)
+    if mesma:
+        return mesma
+
+    # Arkhé recebe reais; VALOR_CENTAVOS permanece inteiro no banco.
+    valor = float(Decimal(str(centavos)) / 100)
+    if metodo == 'CARTAO':
+        return _pagar_cartao(sessao_id, profissional_id, inicio, centavos, {**cartao, 'valor': valor})
+    corpo = {'valor': valor}
+    if metodo == 'BOLETO':
+        # Vence no dia da consulta (ou hoje, se ela ja passou); o CPF do paciente precisa ter conta na Arkhé
+        corpo |= {'documento_pagador': cpf, 'data_vencimento': max(date.today(), inicio.date()).isoformat()}
+    status, resposta = _arkhe_request('POST', CAMINHOS[metodo], corpo)
     if status >= 400:
-        raise ErroNegocio('Arkhé nao criou a cobranca', 502, detalhes=resposta)
-
-    try:
-        valor_retornado = Decimal(str(resposta.get('valor')))
-    except InvalidOperation:
-        valor_retornado = Decimal("NaN")
-    if not valor_retornado.is_finite() or valor_retornado * 100 != Decimal(str(sessao[1])):
-        raise ErroNegocio('Arkhé retornou um valor invalido', 502)
-    if not isinstance(resposta.get('id_cobranca'), int):
-        raise ErroNegocio('Arkhé retornou uma cobranca sem id', 502)
+        _recusa(status, resposta, 'Arkhé nao criou a cobranca')
+    _conferir(resposta, 'id_cobranca', centavos)
 
     with transacao() as cur:
-        cur.execute('INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, VALOR_CENTAVOS) VALUES (?, ?, ?)',
-                    (sessao_id, resposta['id_cobranca'], sessao[1]))
-    return resposta
+        cur.execute('INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS) VALUES (?, ?, ?, ?)',
+                    (sessao_id, resposta['id_cobranca'], metodo, centavos))
+    return _apresentar(metodo, resposta)
+
+
+def _pagar_cartao(sessao_id, profissional_id, inicio, centavos, venda):
+    status, resposta = _arkhe_request('POST', '/api/v1/vendas/cartao', venda)
+    if status >= 400:
+        _recusa(status, resposta, 'Arkhé nao processou o cartao')
+    if resposta.get('aprovado') is not True:
+        raise ErroNegocio('Arkhé retornou uma venda invalida', 502)
+    _conferir(resposta, 'id_compra', centavos)
+
+    # ponytail: se o INSERT falhar apos a aprovacao, a venda fica so na Arkhé (o 500 vai para o log); repetir
+    # nao cobra de novo, porque ela recusa venda igual por 5 minutos
+    with transacao() as cur:
+        cur.execute('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS, STATUS, PAGO_EM)
+            VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP)''', (sessao_id, resposta['id_compra'], centavos))
+        email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
+    notificacoes_service.enviar_emails([email])
+    return _apresentar('CARTAO', resposta)
+
+
+def _pagamento_do_participante(cur, usuario_id, id_cobranca, metodos):
+    cur.execute(f'''SELECT p.METODO, p.STATUS, s.SESSAO_ID, s.PROFISSIONAL_ID, s.DATA_HORA_INICIO
+        FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID
+        WHERE p.ID_COBRANCA_ARKHE = ? AND p.METODO IN ({', '.join('?' * len(metodos))})
+          AND ? IN (s.PACIENTE_ID, s.PROFISSIONAL_ID)''', (id_cobranca, *metodos, usuario_id))
+    pagamento = cur.fetchone()
+    if pagamento is None:
+        raise ErroNegocio('Cobranca nao encontrada', 404)
+    return pagamento
 
 
 def consultar_cobranca(usuario_id, id_cobranca):
+    # Pix e boleto saem da mesma tabela da Arkhé, entao o id nao se repete entre os dois
     with transacao() as cur:
-        cur.execute('''SELECT p.STATUS, s.SESSAO_ID, s.PROFISSIONAL_ID, s.DATA_HORA_INICIO
-            FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID
-            WHERE p.ID_COBRANCA_ARKHE = ? AND ? IN (s.PACIENTE_ID, s.PROFISSIONAL_ID)''', (id_cobranca, usuario_id))
-        pagamento = cur.fetchone()
-    if pagamento is None:
-        raise ErroNegocio('Cobranca nao encontrada', 404)
+        metodo, status_local, *sessao = _pagamento_do_participante(cur, usuario_id, id_cobranca, tuple(CAMINHOS))
 
-    status, resposta = _arkhe_request('GET', f'/api/v1/cobrancas/pix/{id_cobranca}')
+    status, resposta = _arkhe_request('GET', f'{CAMINHOS[metodo]}/{id_cobranca}')
     if status >= 400:
         raise ErroNegocio('Arkhé nao consultou a cobranca', 502, detalhes=resposta)
     if resposta.get('status') not in (0, 1):
         raise ErroNegocio('Arkhé retornou status de pagamento desconhecido', 502)
-    if resposta['status'] == 1 and pagamento[0] == 'PENDENTE':
-        _confirmar(id_cobranca, *pagamento[1:])
-    return resposta
+    if resposta['status'] == 1 and status_local == 'PENDENTE':
+        _confirmar(metodo, id_cobranca, *sessao)
+    return _apresentar(metodo, resposta)
 
 
-def _confirmar(id_cobranca, sessao_id, profissional_id, inicio):
+def boleto_pdf(usuario_id, id_cobranca):
+    with transacao() as cur:
+        _pagamento_do_participante(cur, usuario_id, id_cobranca, ('BOLETO',))
+    status, pdf = _arkhe_request('GET', f'/api/v1/cobrancas/boletos/{id_cobranca}/pdf', bruto=True)
+    if status >= 400:
+        raise ErroNegocio('Arkhé nao gerou o PDF do boleto', 502, detalhes=pdf)
+    return pdf
+
+
+def _confirmar(metodo, id_cobranca, sessao_id, profissional_id, inicio):
     # shortcut: o status so muda quando alguem consulta a cobranca; webhook ou job (F7) se a Arkhé tiver
     with transacao() as cur:
         cur.execute('''UPDATE PAGAMENTO SET STATUS = 'PAGO', PAGO_EM = CURRENT_TIMESTAMP
-            WHERE ID_COBRANCA_ARKHE = ? AND STATUS = 'PENDENTE' RETURNING PAGAMENTO_ID''', (id_cobranca,))
+            WHERE METODO = ? AND ID_COBRANCA_ARKHE = ? AND STATUS = 'PENDENTE' RETURNING PAGAMENTO_ID''',
+                    (metodo, id_cobranca))
         if cur.fetchone()[0] is None:
             return  # outra requisicao confirmou antes
-        cur.execute("UPDATE SESSAO SET STATUS = 'CONFIRMADO' WHERE SESSAO_ID = ? AND STATUS = 'AGENDADO'", (sessao_id,))
-        emails = [notificacoes_service.notificar(
-            cur, profissional_id, 'PAGAMENTO_CONFIRMADO', 'Pagamento confirmado',
-            f'O paciente pagou a sessão de {inicio.strftime("%d/%m/%Y às %H:%M")}.', {'sessao_id': sessao_id})]
-    notificacoes_service.enviar_emails(emails)
+        email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
+    notificacoes_service.enviar_emails([email])
+
+
+def _sessao_paga(cur, sessao_id, profissional_id, inicio):
+    cur.execute("UPDATE SESSAO SET STATUS = 'CONFIRMADO' WHERE SESSAO_ID = ? AND STATUS = 'AGENDADO'", (sessao_id,))
+    return notificacoes_service.notificar(
+        cur, profissional_id, 'PAGAMENTO_CONFIRMADO', 'Pagamento confirmado',
+        f'O paciente pagou a sessão de {inicio.strftime("%d/%m/%Y às %H:%M")}.', {'sessao_id': sessao_id})
 
 
 def financeiro(papel, dias):
