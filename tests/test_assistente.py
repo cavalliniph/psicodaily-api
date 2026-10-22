@@ -1,4 +1,4 @@
-# Assistente de IA: validacao, ferramentas no banco real e o loop com o modelo simulado (o CI nao tem chave do Groq).
+# Assistente de IA: validacao, ferramentas no banco real e o loop com o modelo simulado (o CI nao tem chave do Gemini).
 import json
 from datetime import date, timedelta
 

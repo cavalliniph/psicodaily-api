@@ -7,9 +7,11 @@ from urllib.request import Request, urlopen
 from services import consultas_service, disponibilidade_service, profissionais_service
 from services.erros import ErroNegocio
 
-# Groq: plano gratuito sem cartao, API no formato da OpenAI. Outro provedor compativel = trocar estas duas.
-URL_LLM = 'https://api.groq.com/openai/v1/chat/completions'
-MODELO = 'openai/gpt-oss-120b'
+# Gemini no plano gratuito, pelo endpoint no formato da OpenAI (trocado do Groq em 22/10/2026, que era lento).
+# Outro provedor compativel = trocar URL, modelo e a variavel da chave.
+URL_LLM = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+# 3.5 Flash: ~1,3 s por rodada com ferramentas em 22/10/2026; o 3.8 nao aceita 'minimal' e vivia sobrecarregado (503)
+MODELO = 'gemini-3.5-flash'
 MAXIMO_MENSAGENS = 40
 MAXIMO_CARACTERES = 2000
 MAXIMO_RODADAS = 8
@@ -28,8 +30,9 @@ Como a plataforma funciona:
 - Busca: filtros por especialidade, abordagem, modalidade, preco, idioma, area de atuacao, avaliacao, experiencia e disponibilidade.
 - Favoritos: o paciente salva profissionais e ve o proximo horario livre de cada um.
 - Lista de espera: se nao houver horario, o paciente entra na lista do profissional e e avisado quando uma vaga abrir (a vaga nao fica reservada).
-- Pagamento: por PIX, gerado na tela da consulta. A consulta passa de AGENDADO para CONFIRMADO quando o pagamento e confirmado. Cartao e boleto ainda nao existem.
-- Cancelamento e reagendamento: feitos pelo profissional; o paciente pede pelo chat com ele.
+- Pagamento: na tela da consulta, por PIX, boleto ou cartao (credito ou debito), todos pelo banco Arkhé. O boleto vai para o CPF do paciente, que precisa ter conta na Arkhé, e vence no dia da consulta; o cartao precisa ser emitido pela Arkhé. A consulta passa de AGENDADO para CONFIRMADO quando o pagamento e confirmado (no cartao, na hora).
+- Cancelamento: o paciente cancela pela tela da consulta ate 15 minutos antes do horario, com reembolso integral do que pagou; depois disso nao da mais para cancelar. Se o profissional cancelar, o reembolso tambem e integral. O reembolso e devolvido pela equipe da plataforma.
+- Reagendamento: o paciente cancela e marca outro horario, ou pede ao profissional pelo chat.
 - Chat: liberado entre paciente e profissional depois que existe uma consulta; aceita texto, PDF e imagens ate 10 MB.
 - Videochamada: pelo botao de entrar na sala da consulta, no horario marcado.
 
@@ -108,11 +111,12 @@ CAMPOS_CONSULTA = ('sessao_id', 'profissional_nome', 'data_hora_inicio', 'data_h
 
 def _chamar(mensagens):
     """Uma ida ao modelo; devolve a mensagem do assistente ({content, tool_calls})."""
-    corpo = json.dumps({'model': MODELO, 'messages': mensagens, 'tools': FERRAMENTAS_API}).encode()
+    # low: quase tao rapido quanto minimal e escolhe melhor a ferramenta
+    corpo = json.dumps({'model': MODELO, 'messages': mensagens, 'tools': FERRAMENTAS_API,
+                        'reasoning_effort': 'low'}).encode()
     req = Request(URL_LLM, data=corpo, method='POST', headers={
-        'Authorization': f'Bearer {os.getenv("GROQ_API_KEY", "")}',
+        'Authorization': f'Bearer {os.getenv("GEMINI_API_KEY", "")}',
         'Content-Type': 'application/json',
-        # O Cloudflare do Groq recusa o User-Agent padrao do urllib (erro 1010)
         'User-Agent': 'psicodaily-api',
     })
     try:
@@ -190,7 +194,8 @@ def conversar(paciente_id, papel, dados):
         if not chamadas:
             return {'resposta': resposta.get('content') or '', 'agendamento': agendamento}
 
-        # So os campos do protocolo voltam; campos extras do provedor (ex.: reasoning) podem dar 400.
+        # So os campos do protocolo voltam; campos extras do provedor (ex.: reasoning) podem dar 400. Os tool_calls
+        # voltam intactos: no Gemini 3 eles levam a thought signature (extra_content), exigida na rodada seguinte.
         mensagens.append({'role': 'assistant', 'content': resposta.get('content') or '', 'tool_calls': chamadas})
         for chamada in chamadas:
             nome = chamada['function']['name']
