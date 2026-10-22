@@ -20,6 +20,7 @@ from view.notificacoes import notificacoes_bp
 from view.lista_espera import lista_espera_bp
 from view.dashboard import dashboard_bp
 from view.chat import chat_bp
+from view.assistente import assistente_bp
 from flask_cors import CORS
 from config import ORIGENS_FRONT
 # from pathlib import Path
@@ -50,6 +51,7 @@ app.register_blueprint(notificacoes_bp)
 app.register_blueprint(lista_espera_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(chat_bp)
+app.register_blueprint(assistente_bp)
 
 app.config.from_pyfile("config.py")
 
