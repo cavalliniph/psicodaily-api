@@ -1,7 +1,10 @@
+import os
+
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 from services.erros import ErroNegocio
 from services.auditoria_service import IP_ATUAL
+from services import lembretes_service
 from database.db import banco_responde
 from flask.cli import load_dotenv
 from view.auth import auth_bp
@@ -21,6 +24,7 @@ from view.lista_espera import lista_espera_bp
 from view.dashboard import dashboard_bp
 from view.chat import chat_bp
 from view.assistente import assistente_bp
+from view.whatsapp import whatsapp_bp
 from flask_cors import CORS
 from config import ORIGENS_FRONT
 # from pathlib import Path
@@ -52,8 +56,13 @@ app.register_blueprint(lista_espera_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistente_bp)
+app.register_blueprint(whatsapp_bp)
 
 app.config.from_pyfile("config.py")
+
+# Lembretes 24h e 1h antes (30): thread do processo unico; JOBS=0 desliga (testes)
+if os.getenv('JOBS', '1') == '1':
+    lembretes_service.iniciar()
 
 
 @app.before_request

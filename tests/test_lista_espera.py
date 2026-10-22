@@ -86,9 +86,11 @@ def test_cancelamento_avisa_so_o_primeiro_compativel(paciente, outro_paciente, p
     segunda = entrar(paciente, em(14), em(17)).get_json()['lista_espera']
     do_dono = entrar(outro_paciente, em(8), em(20)).get_json()['lista_espera']  # o paciente da sessao nao e avisado
 
-    # Trocar o link nao libera horario
+    # Trocar o link nao libera horario: so o paciente da sessao recebe o link (30)
+    emails.clear()  # avisos do agendamento
     assert profissional.patch(f'/api/consultas/{sessao_id}', json={'link_reuniao': 'https://meet.x/a'}).status_code == 200
-    assert emails == []
+    assert [(email[0], email[1]) for email in emails] == [('outro.paciente@exemplo.com', 'Link da consulta')], emails
+    emails.clear()
 
     assert profissional.patch(f'/api/consultas/{sessao_id}', json={'status': 'CANCELADO'}).status_code == 200
     vaga = [email for email in emails if email[1].startswith('Abriu um horário')]

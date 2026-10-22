@@ -172,3 +172,5 @@ def test_pagamentos_sem_chamar_a_arkhe(anonimo, paciente, profissional):
     for rota in ('/api/admin/reembolsos', '/api/admin/repasses'):
         checar(profissional.get(rota), 403, 'error')
     checar(profissional.post('/api/admin/repasses'), 403, 'error')
+    # Webhook do WAHA sem assinatura valida
+    checar(anonimo.post('/api/whatsapp/webhook', json={'event': 'message'}), 401, 'error')

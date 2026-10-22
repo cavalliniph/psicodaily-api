@@ -1,11 +1,15 @@
 import json
+import logging
 import os
-from datetime import date
+import threading
+from datetime import date, datetime, timedelta
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from services import consultas_service, disponibilidade_service, profissionais_service
+from services import consultas_service, disponibilidade_service, profissionais_service, whatsapp_service
 from services.erros import ErroNegocio
+
+logger = logging.getLogger(__name__)
 
 # Gemini no plano gratuito, pelo endpoint no formato da OpenAI (trocado do Groq em 22/10/2026, que era lento).
 # Outro provedor compativel = trocar URL, modelo e a variavel da chave.
@@ -23,7 +27,7 @@ Fale em portugues do Brasil, com frases curtas e acolhedoras.
 Voce ajuda o paciente a: entender como a plataforma funciona, encontrar profissionais, ver horarios livres e montar um agendamento.
 As ferramentas usam precos em centavos; para o paciente, mostre sempre em reais (15000 = R$ 150,00).
 Use as ferramentas para qualquer dado de profissionais, horarios ou consultas; nunca invente nomes, precos ou horarios.
-Para agendar, chame propor_agendamento: o paciente confirma no botao que aparece na tela. Nunca diga que a consulta ja foi marcada.
+Para agendar, chame propor_agendamento; para cancelar, chame propor_cancelamento com o sessao_id de minhas_consultas. O paciente confirma depois (botao no site ou SIM no WhatsApp): nunca diga que a consulta ja foi marcada ou cancelada.
 
 Como a plataforma funciona:
 - Questionario inicial (Perfil > Preferencias): melhora as recomendacoes de profissionais.
@@ -99,7 +103,19 @@ FERRAMENTAS = [
             'additionalProperties': False,
         },
     },
+    {
+        'name': 'propor_cancelamento',
+        'description': 'Pede ao paciente a confirmacao para cancelar uma consulta dele (ate 15 min antes, reembolso integral).',
+        'input_schema': {
+            'type': 'object',
+            'properties': {'sessao_id': {'type': 'integer'}},
+            'required': ['sessao_id'],
+            'additionalProperties': False,
+        },
+    },
 ]
+# Ferramentas que so propoem: a acao fica para o paciente confirmar, e a proposta volta na resposta
+PROPOSTAS = {'propor_agendamento': 'agendamento', 'propor_cancelamento': 'cancelamento'}
 
 FERRAMENTAS_API = [{'type': 'function', 'function': {'name': f['name'], 'description': f['description'],
                                                      'parameters': f['input_schema']}} for f in FERRAMENTAS]
@@ -161,6 +177,8 @@ def executar_ferramenta(nome, entrada, paciente_id):
         return _resumo(consultas_service.listar(paciente_id, 'PACIENTE')[:10], CAMPOS_CONSULTA)
     if nome == 'propor_agendamento':
         return _propor(entrada['id_profissional'], entrada['inicio'], entrada['fim'])
+    if nome == 'propor_cancelamento':
+        return consultas_service.checar_cancelamento(paciente_id, entrada['sessao_id'])
     raise ErroNegocio(f'Ferramenta desconhecida: {nome}')
 
 
@@ -187,12 +205,12 @@ def conversar(paciente_id, papel, dados):
     sistema = f'{SISTEMA}\n\nHoje: {date.today().isoformat()}'
     mensagens = [{'role': 'system', 'content': sistema}, *_validar(dados)]
 
-    agendamento = None
+    propostas = dict.fromkeys(PROPOSTAS.values())
     for _ in range(MAXIMO_RODADAS):
         resposta = _chamar(mensagens)
         chamadas = resposta.get('tool_calls') or []
         if not chamadas:
-            return {'resposta': resposta.get('content') or '', 'agendamento': agendamento}
+            return {'resposta': resposta.get('content') or '', **propostas}
 
         # So os campos do protocolo voltam; campos extras do provedor (ex.: reasoning) podem dar 400. Os tool_calls
         # voltam intactos: no Gemini 3 eles levam a thought signature (extra_content), exigida na rodada seguinte.
@@ -201,8 +219,8 @@ def conversar(paciente_id, papel, dados):
             nome = chamada['function']['name']
             try:
                 saida = executar_ferramenta(nome, json.loads(chamada['function']['arguments'] or '{}'), paciente_id)
-                if nome == 'propor_agendamento':
-                    agendamento = saida
+                if nome in PROPOSTAS:
+                    propostas[PROPOSTAS[nome]] = saida
                 conteudo = json.dumps(saida, ensure_ascii=False, default=str)
             except ErroNegocio as erro:
                 conteudo = f'Erro: {erro.mensagem}'
@@ -212,3 +230,87 @@ def conversar(paciente_id, papel, dados):
             mensagens.append({'role': 'tool', 'tool_call_id': chamada['id'], 'name': nome, 'content': conteudo})
 
     raise ErroNegocio('O assistente nao concluiu a resposta, tente reformular a pergunta', 502)
+
+
+# WhatsApp (12 e 31): o mesmo assistente, com historico por numero em memoria (processo unico, como o chat).
+# ponytail: o historico some no restart do servidor; tabela se precisar guardar conversas
+TTL_CONVERSA = timedelta(hours=2)
+MAXIMO_HISTORICO = 20
+SIM = {'sim', 's', 'confirmo', 'confirmar', 'ok', 'pode'}
+NAO = {'nao', 'não', 'n'}
+_conversas = {}
+_conversas_lock = threading.Lock()
+
+
+def receber_whatsapp(evento):
+    """Evento do webhook do WAHA: responde em segundo plano mensagem de texto de pessoa (nao de grupo nem nossa)."""
+    payload = evento.get('payload') if isinstance(evento, dict) else None
+    if evento.get('event') != 'message' or not isinstance(payload, dict) or payload.get('fromMe'):
+        return False
+    remetente, texto = payload.get('from'), payload.get('body')
+    if (not isinstance(remetente, str) or not isinstance(texto, str) or not texto.strip()
+            or remetente.endswith(('@g.us', '@broadcast', '@newsletter'))):
+        return False
+    threading.Thread(target=responder_whatsapp, args=(remetente, texto), daemon=True).start()
+    return True
+
+
+def responder_whatsapp(remetente, texto):
+    telefone = whatsapp_service.telefone_do_remetente(remetente)
+    usuario = whatsapp_service.usuario_por_telefone(telefone) if telefone else None
+    try:
+        resposta = _responder(usuario, remetente, texto.strip()[:MAXIMO_CARACTERES])
+    except ErroNegocio as erro:
+        resposta = erro.mensagem
+    except Exception:
+        logger.exception('Falha ao responder o WhatsApp de %s', remetente)
+        resposta = 'Tive um problema para responder agora. Tente de novo em instantes.'
+    whatsapp_service.enviar_async(remetente, resposta)
+
+
+def _responder(usuario, chave, texto):
+    if usuario is None:
+        site = os.getenv('FRONT_URL', 'https://psicodaily-front.vercel.app')
+        return f'Não encontrei este número no PsicoDaily. Cadastre-se em {site} com este telefone para conversar comigo por aqui.'
+    usuario_id, papel, _ = usuario
+    if papel != 'PACIENTE':
+        return 'Por aqui eu atendo pacientes. Os avisos das suas consultas continuam chegando neste número.'
+
+    with _conversas_lock:
+        conversa = _conversas.get(chave)
+        if conversa is None or conversa['expira'] < datetime.now():
+            conversa = {'mensagens': [], 'pendente': None}
+        conversa['expira'] = datetime.now() + TTL_CONVERSA
+        _conversas[chave] = conversa
+        pendente, conversa['pendente'] = conversa['pendente'], None
+
+    curta = texto.lower().strip(' .!')
+    if pendente and curta in SIM:
+        return _executar(usuario_id, *pendente)
+    if pendente and curta in NAO:
+        return 'Tudo bem, não fiz nada.'
+
+    historico = (conversa['mensagens'] + [{'role': 'user', 'content': texto}])[-MAXIMO_HISTORICO:]
+    while historico[0]['role'] != 'user':
+        historico.pop(0)
+    resultado = conversar(usuario_id, 'PACIENTE', {'mensagens': historico})
+    resposta = resultado['resposta'] or 'Pode repetir, por favor?'
+    for tipo, acao in (('agendamento', 'o agendamento'), ('cancelamento', 'o cancelamento')):
+        if resultado[tipo]:
+            conversa['pendente'] = (tipo, resultado[tipo])
+            resposta += f'\n\nResponda *SIM* para confirmar {acao}.'
+            break
+    conversa['mensagens'] = historico + [{'role': 'assistant', 'content': resposta[:MAXIMO_CARACTERES]}]
+    return resposta
+
+
+def _executar(paciente_id, tipo, dados):
+    """O SIM do paciente: agenda ou cancela pelas mesmas regras das rotas do site."""
+    if tipo == 'agendamento':
+        consultas_service.agendar(paciente_id, 'PACIENTE', dados)
+        return 'Pronto, consulta agendada! Para confirmá-la, pague pela tela da consulta no site.'
+    reembolso = consultas_service.cancelar(paciente_id, 'PACIENTE', dados['sessao_id'])['reembolso_centavos']
+    if reembolso:
+        valor = f'{reembolso / 100:.2f}'.replace('.', ',')
+        return f'Consulta cancelada. Vamos devolver R$ {valor} integralmente.'
+    return 'Consulta cancelada.'

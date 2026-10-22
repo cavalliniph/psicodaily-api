@@ -67,11 +67,15 @@ def test_fluxo_do_pix(arkhe, sessao, paciente, outro_paciente, profissional, ult
     assert _pagamentos(sessao) == [('PIX', 'PAGO')]
     assert executar('SELECT STATUS FROM SESSAO WHERE SESSAO_ID = ?', (sessao,)) == [('CONFIRMADO',)]
     avisos = executar('SELECT USUARIO_ID, TIPO FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,))
-    assert avisos == [(PROFISSIONAL, 'PAGAMENTO_CONFIRMADO')], avisos
+    # Profissional avisado e comprovante para o paciente (13)
+    assert avisos == [(PROFISSIONAL, 'PAGAMENTO_CONFIRMADO'), (PACIENTE, 'PAGAMENTO_RECEBIDO')], avisos
+    comprovante = executar("SELECT MENSAGEM FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ? AND TIPO = 'PAGAMENTO_RECEBIDO'",
+                           (ultima_notificacao,))[0][0]
+    assert 'R$ 150,00 por pix' in comprovante and str(ID_PIX) in comprovante, comprovante
 
     # Consultar de novo nao notifica outra vez; pagar de novo e recusado
     paciente.get(f'/api/pagamentos/cobranca/{ID_PIX}')
-    assert len(executar('SELECT 1 FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,))) == 1
+    assert len(executar('SELECT 1 FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,))) == 2
     assert paciente.post('/api/pagamentos/cobranca', json={'id_sessao': sessao}).status_code == 409
 
 
@@ -112,7 +116,7 @@ def test_cartao_aprovado_confirma_na_hora(arkhe, sessao, paciente, ultima_notifi
     # A taxa da Arkhé no credito (5%) fica gravada para o financeiro do profissional (32)
     assert executar("SELECT TAXA_ARKHE_CENTAVOS FROM PAGAMENTO WHERE SESSAO_ID = ? AND METODO = 'CARTAO'", (sessao,)) == [(750,)]
     assert executar('SELECT STATUS FROM SESSAO WHERE SESSAO_ID = ?', (sessao,)) == [('CONFIRMADO',)]
-    assert executar('SELECT TIPO FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,)) == [('PAGAMENTO_CONFIRMADO',)]
+    assert executar('SELECT TIPO FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,)) == [('PAGAMENTO_CONFIRMADO',), ('PAGAMENTO_RECEBIDO',)]
     assert paciente.post('/api/pagamentos/cobranca', json={'id_sessao': sessao, 'metodo': 'CARTAO', 'cartao': CARTAO}).status_code == 409
 
 

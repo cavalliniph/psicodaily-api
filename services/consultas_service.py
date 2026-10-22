@@ -149,7 +149,20 @@ def agendar(paciente_id, papel, data):
         """, (paciente_id, id_profissional, None, None, inicio, fim, profissional[0], None))
         sessao = _sessao_retornada(cur)
         auditar(cur, paciente_id, 'SESSAO_AGENDADA', 'SESSAO', sessao['sessao_id'])
-        return sessao
+        quando = inicio.strftime('%d/%m/%Y às %H:%M')
+        cur.execute('SELECT NOME FROM USUARIO WHERE ID_USUARIO = ?', (paciente_id,))
+        nome_paciente = cur.fetchone()[0]
+        dados = {'sessao_id': sessao['sessao_id']}
+        emails = [
+            notificacoes_service.notificar(
+                cur, paciente_id, 'SESSAO_AGENDADA', 'Consulta agendada',
+                f'Sua consulta de {quando} foi agendada. Pague pela tela da consulta para confirmá-la. '
+                f'No horário, entre pela sala: {url_sala(sessao["sessao_id"])}', dados),
+            notificacoes_service.notificar(cur, id_profissional, 'SESSAO_AGENDADA', 'Nova consulta',
+                                           f'{nome_paciente} agendou uma consulta para {quando}.', dados),
+        ]
+    notificacoes_service.enviar_emails(emails)
+    return sessao
 
 
 def _ler_link(link):
@@ -220,11 +233,21 @@ def atualizar(profissional_id, sessao_id, dados):
                     (*parametros, sessao_id, profissional_id))
         atualizada = _sessao_retornada(cur)
         auditar(cur, profissional_id, 'SESSAO_ALTERADA', 'SESSAO', sessao_id)
-        emails = []
+        # 30: o paciente fica sabendo de horario novo e de link novo (tambem pelo WhatsApp)
+        quando = (intervalo[0] if intervalo else sessao[1]).strftime('%d/%m/%Y às %H:%M')
+        avisos = ([('Consulta remarcada', f'Sua consulta passou para {quando}.')] if intervalo else []) + \
+                 ([('Link da consulta', f'O link da sua consulta de {quando} é {link}')] if link else [])
+        emails = [notificacoes_service.notificar(cur, sessao[3], 'SESSAO_ALTERADA', titulo, mensagem,
+                                                 {'sessao_id': sessao_id}) for titulo, mensagem in avisos]
         if status == 'CANCELADO':
-            _, emails = _ao_cancelar(cur, sessao_id, profissional_id, sessao[3], sessao[1], sessao[2], avisar=sessao[3])
+            _, cancelamento = _ao_cancelar(cur, sessao_id, profissional_id, sessao[3], sessao[1], sessao[2], avisar=sessao[3])
+            emails += cancelamento
     notificacoes_service.enviar_emails(emails)
     return atualizada
+
+
+def url_sala(sessao_id):
+    return f"{os.getenv('FRONT_URL', 'https://psicodaily-front.vercel.app').rstrip('/')}/videochamada/{sessao_id}"
 
 
 def cancelar(paciente_id, papel, sessao_id):
@@ -237,17 +260,37 @@ def cancelar(paciente_id, papel, sessao_id):
         if sessao is None:
             raise ErroNegocio('Sessao nao encontrada', 404)
         status, inicio, fim, profissional_id = sessao
-        if status in ('REALIZADO', 'CANCELADO'):
-            raise ErroNegocio('Esta sessao ja foi encerrada e nao pode ser alterada', 409)
-        if datetime.now() > inicio - ANTECEDENCIA_CANCELAMENTO:
-            minutos = int(ANTECEDENCIA_CANCELAMENTO.total_seconds() // 60)
-            raise ErroNegocio(f'Cancelamento so ate {minutos} minutos antes do horario', 409)
+        _exigir_cancelavel(status, inicio)
         cur.execute("UPDATE SESSAO SET STATUS = 'CANCELADO' WHERE SESSAO_ID = ? RETURNING *", (sessao_id,))
         cancelada = _sessao_retornada(cur)
         auditar(cur, paciente_id, 'SESSAO_CANCELADA', 'SESSAO', sessao_id)
         reembolso, emails = _ao_cancelar(cur, sessao_id, profissional_id, paciente_id, inicio, fim, avisar=profissional_id)
     notificacoes_service.enviar_emails(emails)
     return {'sessao': cancelada, 'reembolso_centavos': reembolso}
+
+
+def _exigir_cancelavel(status, inicio):
+    if status in ('REALIZADO', 'CANCELADO'):
+        raise ErroNegocio('Esta sessao ja foi encerrada e nao pode ser alterada', 409)
+    if datetime.now() > inicio - ANTECEDENCIA_CANCELAMENTO:
+        minutos = int(ANTECEDENCIA_CANCELAMENTO.total_seconds() // 60)
+        raise ErroNegocio(f'Cancelamento so ate {minutos} minutos antes do horario', 409)
+
+
+def checar_cancelamento(paciente_id, sessao_id):
+    """Sem alterar nada: a sessao do paciente pode ser cancelada agora? Para o assistente propor o cancelamento."""
+    with transacao() as cur:
+        cur.execute('''SELECT s.STATUS, s.DATA_HORA_INICIO, u.NOME,
+                (SELECT COUNT(*) FROM PAGAMENTO p WHERE p.SESSAO_ID = s.SESSAO_ID AND p.STATUS = 'PAGO')
+            FROM SESSAO s JOIN USUARIO u ON u.ID_USUARIO = s.PROFISSIONAL_ID
+            WHERE s.SESSAO_ID = ? AND s.PACIENTE_ID = ?''', (sessao_id, paciente_id))
+        sessao = cur.fetchone()
+    if sessao is None:
+        raise ErroNegocio('Sessao nao encontrada', 404)
+    status, inicio, profissional, pagos = sessao
+    _exigir_cancelavel(status, inicio)
+    return {'sessao_id': sessao_id, 'profissional_nome': profissional,
+            'inicio': inicio.isoformat(timespec='minutes'), 'reembolso_integral': pagos > 0}
 
 
 def _ao_cancelar(cur, sessao_id, profissional_id, paciente_id, inicio, fim, avisar):
@@ -329,7 +372,7 @@ _avisos_lock = threading.Lock()
 
 def avisar_entrada_na_sala(sala, id_usuario, presentes):
     """Avisa por e-mail quem ainda nao entrou; uma vez por sessao e por quem entrou."""
-    url_sala = f"{os.getenv('FRONT_URL', 'https://psicodaily-front.vercel.app').rstrip('/')}/videochamada/{sala['sessao_id']}"
+    link = url_sala(sala['sessao_id'])
     quem_entrou = sala['participantes'][id_usuario]
     for destino in sala['participantes'].values():
         if destino['id_usuario'] == id_usuario or destino['id_usuario'] in presentes:
@@ -345,5 +388,5 @@ def avisar_entrada_na_sala(sala, id_usuario, presentes):
             f"Olá, {destino['nome']}.\n\n"
             f"{quem_entrou['nome']} já está na sala da consulta de "
             f"{sala['inicio'].strftime('%d/%m/%Y às %H:%M')} e aguarda você.\n\n"
-            f"Entre pelo link: {url_sala}",
+            f"Entre pelo link: {link}",
         )

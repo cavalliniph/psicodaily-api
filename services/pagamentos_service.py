@@ -196,8 +196,8 @@ def _pagar_cartao(sessao_id, profissional_id, inicio, centavos, venda):
         cur.execute('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS, STATUS, PAGO_EM,
                 TAXA_ARKHE_CENTAVOS)
             VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP, ?)''', (sessao_id, resposta['id_compra'], centavos, taxa))
-        email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
-    notificacoes_service.enviar_emails([email])
+        emails = _sessao_paga(cur, sessao_id, profissional_id, inicio, 'CARTAO', resposta['id_compra'])
+    notificacoes_service.enviar_emails(emails)
     return _apresentar('CARTAO', resposta)
 
 
@@ -249,8 +249,8 @@ def _confirmar(metodo, id_cobranca, sessao_id, profissional_id, inicio):
             # A Arkhé nao cancela cobranca: pago depois do cancelamento, o valor volta para o paciente
             registrar_reembolso(cur, sessao_id)
             return
-        email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
-    notificacoes_service.enviar_emails([email])
+        emails = _sessao_paga(cur, sessao_id, profissional_id, inicio, metodo, id_cobranca)
+    notificacoes_service.enviar_emails(emails)
 
 
 def registrar_reembolso(cur, sessao_id):
@@ -284,11 +284,21 @@ def pix_saida(cpf, centavos, chave):
     return resposta['id_movimentacao']
 
 
-def _sessao_paga(cur, sessao_id, profissional_id, inicio):
+def _sessao_paga(cur, sessao_id, profissional_id, inicio, metodo, id_arkhe):
+    """Confirma a sessao e devolve os avisos: ao profissional e o comprovante ao paciente (13)."""
     cur.execute("UPDATE SESSAO SET STATUS = 'CONFIRMADO' WHERE SESSAO_ID = ? AND STATUS = 'AGENDADO'", (sessao_id,))
-    return notificacoes_service.notificar(
-        cur, profissional_id, 'PAGAMENTO_CONFIRMADO', 'Pagamento confirmado',
-        f'O paciente pagou a sessão de {inicio.strftime("%d/%m/%Y às %H:%M")}.', {'sessao_id': sessao_id})
+    cur.execute('SELECT PACIENTE_ID, VALOR_CENTAVOS FROM SESSAO WHERE SESSAO_ID = ?', (sessao_id,))
+    paciente_id, centavos = cur.fetchone()
+    quando = inicio.strftime("%d/%m/%Y às %H:%M")
+    valor = f'R$ {centavos / 100:.2f}'.replace('.', ',')
+    dados = {'sessao_id': sessao_id}
+    return [
+        notificacoes_service.notificar(cur, profissional_id, 'PAGAMENTO_CONFIRMADO', 'Pagamento confirmado',
+                                       f'O paciente pagou a sessão de {quando}.', dados),
+        notificacoes_service.notificar(cur, paciente_id, 'PAGAMENTO_RECEBIDO', 'Comprovante de pagamento',
+                                       f'Recebemos {valor} por {metodo.lower()} pela consulta de {quando}, '
+                                       f'que está confirmada. Comprovante Arkhé nº {id_arkhe}.', dados),
+    ]
 
 
 def financeiro(papel, dias):

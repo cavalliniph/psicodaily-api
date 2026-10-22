@@ -1,7 +1,10 @@
+import os
 import threading
 
 import pytest
 from werkzeug.serving import make_server
+
+os.environ['JOBS'] = '0'  # sem a thread de lembretes: os testes chamam enviar_lembretes direto
 
 from apoio import ADMIN, OUTRO_PACIENTE, PACIENTE, PORTA, PROFISSIONAL, PSIQUIATRA, cliente, executar
 from app import app
