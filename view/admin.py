@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from services import admin_service
+from services import admin_service, financeiro_service
 from util.usuarios import admin_autenticado
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api/admin')
@@ -27,3 +27,19 @@ def auditoria(dados_usuario):
     resposta = jsonify(admin_service.auditoria(limite, antes, usuario_id, request.args.get('acao') or None))
     resposta.headers['Cache-Control'] = 'private, no-store'
     return resposta
+
+
+@admin_bp.route('/reembolsos', methods=['GET'])
+@admin_autenticado
+def reembolsos(dados_usuario):
+    resposta = jsonify({'reembolsos': financeiro_service.listar_reembolsos(request.args.get('status') or None)})
+    resposta.headers['Cache-Control'] = 'private, no-store'
+    return resposta
+
+
+@admin_bp.route('/reembolsos/<int:reembolso_id>/pagar', methods=['POST'])
+@admin_autenticado
+def pagar_reembolso(dados_usuario, reembolso_id):
+    reembolso = financeiro_service.pagar_reembolso(dados_usuario.get('id_usuario'), reembolso_id,
+                                                   request.get_json(silent=True))
+    return jsonify({'message': 'Reembolso pago', 'reembolso': reembolso})

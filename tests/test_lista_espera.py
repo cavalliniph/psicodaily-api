@@ -91,8 +91,11 @@ def test_cancelamento_avisa_so_o_primeiro_compativel(paciente, outro_paciente, p
     assert emails == []
 
     assert profissional.patch(f'/api/consultas/{sessao_id}', json={'status': 'CANCELADO'}).status_code == 200
-    assert len(emails) == 1 and emails[0][0] == 'paciente.teste@exemplo.com', emails
-    assert DIA.strftime('%d/%m/%Y') + ' às 15:00' in emails[0][2], emails
+    vaga = [email for email in emails if email[1].startswith('Abriu um horário')]
+    assert len(vaga) == 1 and vaga[0][0] == 'paciente.teste@exemplo.com', emails
+    assert DIA.strftime('%d/%m/%Y') + ' às 15:00' in vaga[0][2], emails
+    # O paciente da sessao tambem e avisado do cancelamento (24)
+    assert [email[1] for email in emails if email not in vaga] == ['Consulta cancelada'], emails
 
     avisados = {e['lista_espera_id']: e['avisado_em'] for e in paciente.get('/api/lista-espera/').get_json()['lista_espera']}
     assert avisados[primeira['lista_espera_id']] and not avisados[segunda['lista_espera_id']], avisados

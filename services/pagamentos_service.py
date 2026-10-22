@@ -18,7 +18,7 @@ ARKHE_BASE_URL = os.getenv(
 ).rstrip('/')
 
 
-def _arkhe_request(method, path, body=None, bruto=False):
+def _arkhe_request(method, path, body=None, bruto=False, cabecalhos=None):
     """(status, corpo JSON); com bruto=True o corpo de sucesso volta em bytes (PDF do boleto)."""
     client_id = os.getenv('ARKHE_CLIENT_ID') or os.getenv('CLIENT_ID')
     client_secret = os.getenv('ARKHE_CLIENT_SECRET') or os.getenv('CLIENT_SECRET')
@@ -32,6 +32,7 @@ def _arkhe_request(method, path, body=None, bruto=False):
     }
     if method == 'POST':
         headers['Content-Type'] = 'application/json'
+    headers.update(cabecalhos or {})
 
     dados = json.dumps(body).encode('utf-8') if body is not None else None
     req = Request(f'{ARKHE_BASE_URL}{path}', data=dados, method=method, headers=headers)
@@ -239,8 +240,44 @@ def _confirmar(metodo, id_cobranca, sessao_id, profissional_id, inicio):
                     (metodo, id_cobranca))
         if cur.fetchone()[0] is None:
             return  # outra requisicao confirmou antes
+        cur.execute('SELECT STATUS FROM SESSAO WHERE SESSAO_ID = ?', (sessao_id,))
+        if cur.fetchone()[0] == 'CANCELADO':
+            # A Arkhé nao cancela cobranca: pago depois do cancelamento, o valor volta para o paciente
+            registrar_reembolso(cur, sessao_id)
+            return
         email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
     notificacoes_service.enviar_emails([email])
+
+
+def registrar_reembolso(cur, sessao_id):
+    """Na transacao do cancelamento: reembolso integral de cada pagamento pago da sessao que ainda nao tem um.
+
+    Devolve o total reembolsado da sessao, em centavos."""
+    cur.execute('''INSERT INTO REEMBOLSO (PAGAMENTO_ID, VALOR_CENTAVOS)
+        SELECT p.PAGAMENTO_ID, p.VALOR_CENTAVOS FROM PAGAMENTO p
+        WHERE p.SESSAO_ID = ? AND p.STATUS = 'PAGO'
+          AND NOT EXISTS (SELECT 1 FROM REEMBOLSO r WHERE r.PAGAMENTO_ID = p.PAGAMENTO_ID)''', (sessao_id,))
+    cur.execute('''SELECT COALESCE(SUM(r.VALOR_CENTAVOS), 0) FROM REEMBOLSO r
+        JOIN PAGAMENTO p ON p.PAGAMENTO_ID = r.PAGAMENTO_ID WHERE p.SESSAO_ID = ?''', (sessao_id,))
+    return cur.fetchone()[0]
+
+
+def pix_saida(cpf, centavos, chave):
+    """Pix da conta da plataforma para a chave CPF de alguem (reembolso, repasse); devolve o id da movimentacao.
+
+    So funciona se a Arkhé liberar o nosso Client ID para pagamentos de saida (ARKHE_API_PAGAMENTOS_CLIENT_IDS,
+    do lado dela) e se a pessoa tiver o CPF cadastrado como chave Pix la, o que nao e automatico.
+    ponytail: a Arkhé guarda a resposta de cada chave de idempotencia por 7 dias; repetir depois de uma recusa
+    devolve a mesma recusa, entao o admin paga por fora e marca como pago
+    """
+    status, resposta = _arkhe_request(
+        'POST', '/api/v1/pagamentos/pix',
+        {'tipo_chave': 'cpf', 'chave_pix': cpf, 'valor': float(Decimal(str(centavos)) / 100)},
+        cabecalhos={'X-Idempotency-Key': chave})
+    if status != 201 or not isinstance(resposta.get('id_movimentacao'), int):
+        motivo = resposta.get('mensagem') or f'HTTP {status}'
+        raise ErroNegocio(f'Arkhé nao fez o Pix ({motivo}). Pague por fora e marque como pago', 502)
+    return resposta['id_movimentacao']
 
 
 def _sessao_paga(cur, sessao_id, profissional_id, inicio):

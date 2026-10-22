@@ -27,6 +27,13 @@ def atualizar_consulta(dados_usuario, sessao_id):
     return jsonify({'message': 'Sessao atualizada com sucesso', 'sessao': sessao})
 
 
+@cons_bp.route('/<int:sessao_id>/cancelar', methods=['POST'])
+@usuario_autenticado
+def cancelar_consulta(dados_usuario, sessao_id):
+    resultado = consultas_service.cancelar(dados_usuario.get('id_usuario'), dados_usuario.get('usuario_role'), sessao_id)
+    return jsonify({'message': 'Consulta cancelada', **resultado})
+
+
 @cons_bp.route('/<int:sessao_id>/avaliacao', methods=['POST'])
 @usuario_autenticado
 def avaliar_consulta(dados_usuario, sessao_id):

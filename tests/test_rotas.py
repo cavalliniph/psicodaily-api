@@ -134,6 +134,9 @@ def test_consultas_prontuario_e_encaminhamentos(anonimo, paciente, outro_pacient
     checar(paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 9}), 400, 'error')
     checar(paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 409, 'error')
     checar(outro_paciente.post(f'/api/consultas/{sid}/avaliacao', json={'nota': 5}), 404, 'error')
+    checar(anonimo.post(f'/api/consultas/{sid}/cancelar'), 401, 'error')
+    checar(profissional.post(f'/api/consultas/{sid}/cancelar'), 403, 'error')
+    checar(outro_paciente.post(f'/api/consultas/{sid}/cancelar'), 404, 'error')
 
     # prontuario (vinculo vem da sessao criada acima)
     checar(paciente.get(f'/api/prontuario/{PACIENTE}'), 403, 'error')

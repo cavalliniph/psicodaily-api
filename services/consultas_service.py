@@ -6,12 +6,15 @@ from urllib.parse import urlsplit
 import fdb
 
 from database.db import transacao
-from services import disponibilidade_service, email_service, lista_espera_service, notificacoes_service
+from services import (disponibilidade_service, email_service, lista_espera_service, notificacoes_service,
+                      pagamentos_service)
 from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 
 MENSAGEM_CONFLITO = 'Profissional ou paciente ja possui consulta nesse horario'
+# 24: o paciente cancela com reembolso integral ate 15 min antes; depois disso nao cancela mais
+ANTECEDENCIA_CANCELAMENTO = timedelta(minutes=15)
 
 
 def serializar_sessao(colunas, linha):
@@ -219,9 +222,47 @@ def atualizar(profissional_id, sessao_id, dados):
         auditar(cur, profissional_id, 'SESSAO_ALTERADA', 'SESSAO', sessao_id)
         emails = []
         if status == 'CANCELADO':
-            emails = lista_espera_service.avisar_vaga(cur, profissional_id, sessao[1], sessao[2], sessao[3])
+            _, emails = _ao_cancelar(cur, sessao_id, profissional_id, sessao[3], sessao[1], sessao[2], avisar=sessao[3])
     notificacoes_service.enviar_emails(emails)
     return atualizada
+
+
+def cancelar(paciente_id, papel, sessao_id):
+    if papel != 'PACIENTE':
+        raise ErroNegocio('Somente o paciente cancela por esta rota', 403)
+    with transacao() as cur:
+        cur.execute('''SELECT STATUS, DATA_HORA_INICIO, DATA_HORA_FIM, PROFISSIONAL_ID
+            FROM SESSAO WHERE SESSAO_ID = ? AND PACIENTE_ID = ? WITH LOCK''', (sessao_id, paciente_id))
+        sessao = cur.fetchone()
+        if sessao is None:
+            raise ErroNegocio('Sessao nao encontrada', 404)
+        status, inicio, fim, profissional_id = sessao
+        if status in ('REALIZADO', 'CANCELADO'):
+            raise ErroNegocio('Esta sessao ja foi encerrada e nao pode ser alterada', 409)
+        if datetime.now() > inicio - ANTECEDENCIA_CANCELAMENTO:
+            minutos = int(ANTECEDENCIA_CANCELAMENTO.total_seconds() // 60)
+            raise ErroNegocio(f'Cancelamento so ate {minutos} minutos antes do horario', 409)
+        cur.execute("UPDATE SESSAO SET STATUS = 'CANCELADO' WHERE SESSAO_ID = ? RETURNING *", (sessao_id,))
+        cancelada = _sessao_retornada(cur)
+        auditar(cur, paciente_id, 'SESSAO_CANCELADA', 'SESSAO', sessao_id)
+        reembolso, emails = _ao_cancelar(cur, sessao_id, profissional_id, paciente_id, inicio, fim, avisar=profissional_id)
+    notificacoes_service.enviar_emails(emails)
+    return {'sessao': cancelada, 'reembolso_centavos': reembolso}
+
+
+def _ao_cancelar(cur, sessao_id, profissional_id, paciente_id, inicio, fim, avisar):
+    """Na transacao do cancelamento: reembolso integral do que foi pago, vaga para a lista de espera e aviso
+    a outra parte. Devolve (centavos reembolsados, e-mails para enviar depois do commit)."""
+    reembolso = pagamentos_service.registrar_reembolso(cur, sessao_id)
+    emails = lista_espera_service.avisar_vaga(cur, profissional_id, inicio, fim, paciente_id)
+    quem_cancelou = paciente_id if avisar == profissional_id else profissional_id
+    cur.execute('SELECT NOME FROM USUARIO WHERE ID_USUARIO = ?', (quem_cancelou,))
+    mensagem = f'{cur.fetchone()[0]} cancelou a consulta de {inicio.strftime("%d/%m/%Y às %H:%M")}.'
+    if reembolso and avisar == paciente_id:
+        mensagem += ' O valor pago será devolvido integralmente.'
+    emails.append(notificacoes_service.notificar(cur, avisar, 'SESSAO_CANCELADA', 'Consulta cancelada', mensagem,
+                                                 {'sessao_id': sessao_id}))
+    return reembolso, emails
 
 
 def avaliar(paciente_id, papel, sessao_id, dados):
