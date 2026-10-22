@@ -4,7 +4,7 @@ from database.db import transacao
 from services import email_service
 from services.erros import ErroNegocio
 
-TIPOS = {'VAGA_LISTA_ESPERA', 'PAGAMENTO_CONFIRMADO', 'SESSAO_CANCELADA', 'REEMBOLSO_PAGO'}
+TIPOS = {'VAGA_LISTA_ESPERA', 'PAGAMENTO_CONFIRMADO', 'SESSAO_CANCELADA', 'REEMBOLSO_PAGO', 'REPASSE_PAGO'}
 
 
 def notificar(cur, usuario_id, tipo, titulo, mensagem, dados=None):

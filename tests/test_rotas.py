@@ -167,3 +167,8 @@ def test_pagamentos_sem_chamar_a_arkhe(anonimo, paciente, profissional):
     checar(paciente.get('/api/pagamentos/financeiro'), 403, 'error')
     checar(profissional.get('/api/pagamentos/financeiro?dias=2'), 400, 'error')
     checar(anonimo.get('/api/pagamentos/cobranca/1'), 401, 'error')
+    checar(paciente.get('/api/pagamentos/ganhos'), 403, 'error')
+    checar(profissional.get('/api/pagamentos/ganhos'), 200, 'resumo', 'saldo', 'consultas', 'repasses')
+    for rota in ('/api/admin/reembolsos', '/api/admin/repasses'):
+        checar(profissional.get(rota), 403, 'error')
+    checar(profissional.post('/api/admin/repasses'), 403, 'error')

@@ -1,5 +1,5 @@
 from flask import Blueprint, Response, jsonify, request
-from services import pagamentos_service
+from services import financeiro_service, pagamentos_service
 from util.usuarios import usuario_autenticado
 
 pagamentos_bp = Blueprint('pagamentos', __name__, url_prefix='/api/pagamentos')
@@ -29,6 +29,13 @@ def boleto_pdf(payload, id_cobranca):
     pdf = pagamentos_service.boleto_pdf(payload.get('id_usuario'), id_cobranca)
     return Response(pdf, mimetype='application/pdf',
                     headers={'Content-Disposition': f'inline; filename=boleto-{id_cobranca}.pdf'})
+
+
+@pagamentos_bp.route('/ganhos', methods=['GET'])
+@usuario_autenticado
+def ganhos(payload):
+    return jsonify(financeiro_service.ganhos(payload.get('id_usuario'), payload.get('usuario_role'),
+                                             request.args.get('dias', '30'))), 200
 
 
 @pagamentos_bp.route('/financeiro', methods=['GET'])

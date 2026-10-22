@@ -34,7 +34,9 @@ def montar(usuario_id, papel):
         else:
             inicio_mes = datetime.combine(date.today().replace(day=1), datetime.min.time())
             cur.execute('''SELECT SUM(p.VALOR_CENTAVOS) FROM PAGAMENTO p JOIN SESSAO s ON s.SESSAO_ID = p.SESSAO_ID
-                WHERE s.PROFISSIONAL_ID = ? AND p.STATUS = 'PAGO' AND p.PAGO_EM >= ?''', (usuario_id, inicio_mes))
+                WHERE s.PROFISSIONAL_ID = ? AND p.STATUS = 'PAGO' AND p.PAGO_EM >= ?
+                  AND NOT EXISTS (SELECT 1 FROM REEMBOLSO r WHERE r.PAGAMENTO_ID = p.PAGAMENTO_ID)''',
+                        (usuario_id, inicio_mes))
             painel['ganhos_mes_centavos'] = cur.fetchone()[0] or 0
             cur.execute('''SELECT COUNT(*) FROM SESSAO WHERE PROFISSIONAL_ID = ? AND STATUS = 'REALIZADO'
                 AND DATA_HORA_INICIO >= ?''', (usuario_id, inicio_mes))

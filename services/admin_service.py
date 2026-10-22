@@ -24,7 +24,8 @@ def metricas(dias):
         cur.execute('''SELECT STATUS, COUNT(*) FROM SESSAO
             WHERE DATA_HORA_INICIO >= ? AND DATA_HORA_INICIO < ? GROUP BY STATUS''', (de, ate))
         sessoes = cur.fetchall()
-        cur.execute("SELECT SUM(VALOR_CENTAVOS) FROM PAGAMENTO WHERE STATUS = 'PAGO' AND PAGO_EM >= ? AND PAGO_EM < ?", (de, ate))
+        cur.execute('''SELECT SUM(p.VALOR_CENTAVOS) FROM PAGAMENTO p WHERE p.STATUS = 'PAGO' AND p.PAGO_EM >= ? AND p.PAGO_EM < ?
+            AND NOT EXISTS (SELECT 1 FROM REEMBOLSO r WHERE r.PAGAMENTO_ID = p.PAGAMENTO_ID)''', (de, ate))
         faturamento = cur.fetchone()[0]
         cur.execute('SELECT USUARIO_ROLE, COUNT(*) FROM USUARIO WHERE ATIVO = TRUE GROUP BY USUARIO_ROLE')
         ativos = cur.fetchall()

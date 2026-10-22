@@ -18,7 +18,8 @@ CARTAO = {'numero_cartao': '4111111111111111', 'validade': '12/2030', 'cvv': '12
 def arkhe(monkeypatch):
     """Arkhé falsa: guarda as chamadas; `status[id]` e o status de cada cobranca e `cartao` a resposta da venda."""
     estado = {'status': {}, 'chamadas': [],
-              'cartao': (201, {'aprovado': True, 'id_compra': ID_COMPRA, 'valor': 150.0, 'final_cartao': '1111'})}
+              'cartao': (201, {'aprovado': True, 'id_compra': ID_COMPRA, 'valor': 150.0, 'taxa': 7.5,
+                               'final_cartao': '1111'})}
 
     def responder(method, path, body=None, bruto=False):
         estado['chamadas'].append((method, path, body))
@@ -108,6 +109,8 @@ def test_cartao_aprovado_confirma_na_hora(arkhe, sessao, paciente, ultima_notifi
     assert resposta.get_json()['cobranca']['metodo'] == 'CARTAO'
     assert arkhe['chamadas'][-1] == ('POST', '/api/v1/vendas/cartao', {**CARTAO, 'valor': 150.0})
     assert _pagamentos(sessao) == [('PIX', 'PENDENTE'), ('CARTAO', 'PAGO')]
+    # A taxa da Arkhé no credito (5%) fica gravada para o financeiro do profissional (32)
+    assert executar("SELECT TAXA_ARKHE_CENTAVOS FROM PAGAMENTO WHERE SESSAO_ID = ? AND METODO = 'CARTAO'", (sessao,)) == [(750,)]
     assert executar('SELECT STATUS FROM SESSAO WHERE SESSAO_ID = ?', (sessao,)) == [('CONFIRMADO',)]
     assert executar('SELECT TIPO FROM NOTIFICACAO WHERE NOTIFICACAO_ID > ?', (ultima_notificacao,)) == [('PAGAMENTO_CONFIRMADO',)]
     assert paciente.post('/api/pagamentos/cobranca', json={'id_sessao': sessao, 'metodo': 'CARTAO', 'cartao': CARTAO}).status_code == 409

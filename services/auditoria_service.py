@@ -6,7 +6,8 @@ from database.db import transacao
 IP_ATUAL = ContextVar('ip_atual', default=None)
 
 ACOES = {'LOGIN', 'LOGIN_FALHA', 'PRONTUARIO_ACESSO', 'SESSAO_AGENDADA', 'SESSAO_ALTERADA',
-         'ENCAMINHAMENTO_CRIADO', 'SENHA_ALTERADA', 'EMAIL_ALTERADO', 'SESSAO_CANCELADA', 'REEMBOLSO_PAGO'}
+         'ENCAMINHAMENTO_CRIADO', 'SENHA_ALTERADA', 'EMAIL_ALTERADO', 'SESSAO_CANCELADA', 'REEMBOLSO_PAGO',
+         'REPASSE_CRIADO', 'REPASSE_PAGO'}
 
 
 def auditar(cur, usuario_id, acao, entidade=None, entidade_id=None):

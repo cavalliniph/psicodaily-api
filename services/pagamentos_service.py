@@ -189,9 +189,13 @@ def _pagar_cartao(sessao_id, profissional_id, inicio, centavos, venda):
 
     # ponytail: se o INSERT falhar apos a aprovacao, a venda fica so na Arkhé (o 500 vai para o log); repetir
     # nao cobra de novo, porque ela recusa venda igual por 5 minutos
+    # A Arkhé fica com 5% no credito (taxa = valor - valor_recebido); entra no financeiro do profissional (32)
+    taxa = _numero(resposta.get('taxa'))
+    taxa = int((Decimal(str(taxa)) * 100).quantize(Decimal('1'))) if taxa and taxa > 0 else None
     with transacao() as cur:
-        cur.execute('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS, STATUS, PAGO_EM)
-            VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP)''', (sessao_id, resposta['id_compra'], centavos))
+        cur.execute('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS, STATUS, PAGO_EM,
+                TAXA_ARKHE_CENTAVOS)
+            VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP, ?)''', (sessao_id, resposta['id_compra'], centavos, taxa))
         email = _sessao_paga(cur, sessao_id, profissional_id, inicio)
     notificacoes_service.enviar_emails([email])
     return _apresentar('CARTAO', resposta)
