@@ -25,6 +25,7 @@ from view.dashboard import dashboard_bp
 from view.chat import chat_bp
 from view.assistente import assistente_bp
 from view.whatsapp import whatsapp_bp
+from view.assinaturas import assinaturas_bp
 from flask_cors import CORS
 from config import ORIGENS_FRONT
 # from pathlib import Path
@@ -57,10 +58,11 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(assistente_bp)
 app.register_blueprint(whatsapp_bp)
+app.register_blueprint(assinaturas_bp)
 
 app.config.from_pyfile("config.py")
 
-# Lembretes 24h e 1h antes (30): thread do processo unico; JOBS=0 desliga (testes)
+# Lembretes 24h e 1h antes (30) e cobrancas da assinatura (9): thread do processo unico; JOBS=0 desliga (testes)
 if os.getenv('JOBS', '1') == '1':
     lembretes_service.iniciar()
 

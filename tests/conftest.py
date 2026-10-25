@@ -58,6 +58,17 @@ def ultima_auditoria():
     executar('DELETE FROM AUDITORIA WHERE AUDITORIA_ID > ?', (ultima,))
 
 
+@pytest.fixture(autouse=True)
+def visitas_ao_perfil():
+    """Abrir o detalhe de um profissional conta uma visita (9): o contador de hoje volta a ser o de antes."""
+    antes = executar('SELECT PROFISSIONAL_ID, TOTAL FROM VISUALIZACAO_PERFIL WHERE DIA = CURRENT_DATE')
+    yield
+    executar('DELETE FROM VISUALIZACAO_PERFIL WHERE DIA = CURRENT_DATE')
+    for profissional_id, total in antes:
+        executar('INSERT INTO VISUALIZACAO_PERFIL (PROFISSIONAL_ID, DIA, TOTAL) VALUES (?, CURRENT_DATE, ?)',
+                 (profissional_id, total))
+
+
 @pytest.fixture
 def ultima_notificacao():
     """Apaga as notificacoes criadas pelo teste."""

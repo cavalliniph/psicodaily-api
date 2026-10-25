@@ -40,6 +40,12 @@ def substituir_disponibilidade(dados_usuario):
 	return jsonify({'janelas': janelas}), 200
 
 
+@prof_bp.route('/me/desempenho', methods=['GET'])
+@profissional_autenticado
+def desempenho(dados_usuario):
+	return jsonify(profissionais_service.desempenho(dados_usuario['id_usuario'], request.args.get('dias', '30'))), 200
+
+
 @prof_bp.route('/<int:id>/horarios', methods=['GET'])
 def horarios(id):
 	argumentos = request.args

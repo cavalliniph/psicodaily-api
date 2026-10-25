@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from database.db import transacao
-from services import consultas_service, notificacoes_service
+from services import assinaturas_service, consultas_service, notificacoes_service
 from services.erros import ErroNegocio
 
 JANELA_MAXIMA = timedelta(days=31)
@@ -35,6 +35,9 @@ def entrar(paciente_id, papel, dados):
         profissional = cur.fetchone()
         if profissional is None:
             raise ErroNegocio('Profissional não encontrado', 404)
+        # Ferramenta de agenda do plano Profissional (9)
+        if not assinaturas_service.libera(assinaturas_service.plano_ativo(cur, profissional_id), 'PROFISSIONAL'):
+            raise ErroNegocio('Este profissional não tem lista de espera', 409)
         cur.execute('''INSERT INTO LISTA_ESPERA (PACIENTE_ID, PROFISSIONAL_ID, INICIO_DESEJADO, FIM_DESEJADO)
             VALUES (?, ?, ?, ?) RETURNING LISTA_ESPERA_ID, CRIADO_EM''', (paciente_id, profissional_id, inicio, fim))
         lista_espera_id, criado_em = cur.fetchone()

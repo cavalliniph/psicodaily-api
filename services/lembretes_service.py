@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 
 from database.db import transacao
-from services import consultas_service, notificacoes_service
+from services import assinaturas_service, consultas_service, notificacoes_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,13 @@ def _rodar():
             enviar_lembretes()
         except Exception:
             logger.exception('Falha ao enviar lembretes')
+        try:
+            assinaturas_service.processar()
+        except Exception:
+            logger.exception('Falha ao processar as assinaturas')
         time.sleep(INTERVALO_SEGUNDOS)
 
 
 def iniciar():
-    """Thread do processo unico (F7). Um cron job do Northflank nao montaria o volume do banco."""
+    """Thread do processo unico (F7): lembretes e assinaturas. Um cron job do Northflank nao montaria o volume do banco."""
     threading.Thread(target=_rodar, name='lembretes', daemon=True).start()

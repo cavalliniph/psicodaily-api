@@ -1,6 +1,6 @@
 # Perfil completo: formacao, experiencia, idiomas, areas de atuacao e video.
 import random
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -175,3 +175,6 @@ def test_cadastro_multipart(anonimo, envios, email_novo):
     assert janelas.status_code == 404 or janelas.get_json()['janelas'] == [
         {'dia_semana': 1, 'inicio': '08:00', 'fim': '18:00'}], janelas.get_json()
     assert executar('SELECT COUNT(*) FROM DISPONIBILIDADE WHERE PROFISSIONAL_ID = ?', (novo_usuario,)) == [(1,)]
+    # 9: todo cadastro comeca com 30 dias de Essencial gratis
+    assert executar('SELECT PLANO, VALIDA_ATE FROM ASSINATURA WHERE PROFISSIONAL_ID = ?', (novo_usuario,)) == [
+        ('ESSENCIAL', date.today() + timedelta(days=30))]

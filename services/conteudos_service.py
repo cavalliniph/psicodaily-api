@@ -1,6 +1,7 @@
 import re
 
 from database.db import transacao
+from services import assinaturas_service
 from services.erros import ErroNegocio
 
 COLUNAS = ('conteudo_id', 'profissional_id', 'titulo', 'corpo', 'publicado_em', 'atualizado_em')
@@ -47,6 +48,9 @@ def listar(profissional_id):
             WHERE p.USUARIO_ID = ? AND u.ATIVO = TRUE''', (profissional_id,))
         if cur.fetchone() is None:
             raise ErroNegocio('Profissional não encontrado', 404)
+        # Divulgacao do Premium (9): abaixo dele os conteudos ficam guardados, mas fora do perfil
+        if not assinaturas_service.libera(assinaturas_service.plano_ativo(cur, profissional_id), 'PREMIUM'):
+            return []
         cur.execute(f'''SELECT FIRST {MAXIMO_POR_LISTA} {', '.join(COLUNAS)} FROM CONTEUDO
             WHERE PROFISSIONAL_ID = ? ORDER BY PUBLICADO_EM DESC, CONTEUDO_ID DESC''', (profissional_id,))
         return [serializar(linha) for linha in cur.fetchall()]
@@ -55,6 +59,7 @@ def listar(profissional_id):
 def criar(profissional_id, dados):
     limpos = validar(dados)
     with transacao() as cur:
+        assinaturas_service.exigir(cur, profissional_id, 'PREMIUM')
         cur.execute(f'''INSERT INTO CONTEUDO (PROFISSIONAL_ID, TITULO, CORPO) VALUES (?, ?, ?)
             RETURNING {', '.join(COLUNAS)}''', (profissional_id, limpos['titulo'], limpos['corpo']))
         return serializar(cur.fetchone())
@@ -64,6 +69,7 @@ def atualizar(profissional_id, conteudo_id, dados):
     limpos = validar(dados, parcial=True)
     definicoes = ', '.join(f'{campo.upper()} = ?' for campo in limpos)
     with transacao() as cur:
+        assinaturas_service.exigir(cur, profissional_id, 'PREMIUM')
         cur.execute(f'''UPDATE CONTEUDO SET {definicoes}, ATUALIZADO_EM = CURRENT_TIMESTAMP
             WHERE CONTEUDO_ID = ? AND PROFISSIONAL_ID = ? RETURNING {', '.join(COLUNAS)}''',
                     (*limpos.values(), conteudo_id, profissional_id))

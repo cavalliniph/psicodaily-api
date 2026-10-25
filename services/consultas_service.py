@@ -6,8 +6,8 @@ from urllib.parse import urlsplit
 import fdb
 
 from database.db import transacao
-from services import (disponibilidade_service, email_service, lista_espera_service, notificacoes_service,
-                      pagamentos_service)
+from services import (assinaturas_service, disponibilidade_service, email_service, lista_espera_service,
+                      notificacoes_service, pagamentos_service)
 from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
@@ -116,6 +116,9 @@ def agendar(paciente_id, papel, data):
             raise ErroNegocio('Profissional não encontrado', 404)
         if papel != 'PACIENTE':
             raise ErroNegocio('Somente pacientes podem agendar consultas', 403)
+        # Sem assinatura valida (9) o profissional sai da busca e para de receber agendamentos novos
+        if assinaturas_service.plano_ativo(cur, id_profissional) is None:
+            raise ErroNegocio('Este profissional não está aceitando agendamentos', 409)
         na_agenda, parametros = disponibilidade_service.filtro_sql('p.USUARIO_ID', inicio, fim)
         cur.execute(f'SELECT 1 FROM PROFISSIONAL p WHERE p.USUARIO_ID = ? AND {na_agenda}',
                     (id_profissional, *parametros))

@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 
 from database.db import transacao
+from services.assinaturas_service import PLANOS
 from services.auditoria_service import ACOES
 from services.erros import ErroNegocio
 
@@ -33,6 +34,11 @@ def metricas(dias):
         novos = cur.fetchall()
         cur.execute('SELECT AVG(CAST(NOTA AS NUMERIC(5,2))), COUNT(*) FROM AVALIACAO WHERE CRIADO_EM >= ?', (de,))
         media, avaliacoes = cur.fetchone()
+        cur.execute('SELECT PLANO, COUNT(*) FROM ASSINATURA WHERE VALIDA_ATE >= CURRENT_DATE GROUP BY PLANO')
+        planos = cur.fetchall()
+        cur.execute('''SELECT SUM(VALOR_CENTAVOS) FROM COBRANCA_ASSINATURA
+            WHERE STATUS = 'PAGO' AND PAGO_EM >= ? AND PAGO_EM < ?''', (de, ate))
+        receita_assinaturas = cur.fetchone()[0]
 
     return {
         'dias': int(dias),
@@ -42,6 +48,8 @@ def metricas(dias):
         'usuarios_ativos': _contagem(PAPEIS, ativos),
         'novos_cadastros': _contagem(PAPEIS, novos),
         'avaliacao': {'media': round(float(media), 1) if media is not None else None, 'total': avaliacoes},
+        # 9: a receita das assinaturas e da plataforma; faturamento_centavos segue sendo so o das consultas
+        'assinaturas': {'ativas_por_plano': _contagem(PLANOS, planos), 'receita_centavos': receita_assinaturas or 0},
     }
 
 

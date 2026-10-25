@@ -81,12 +81,17 @@ def _ler_pedido(dados):
         raise ErroNegocio('Envie id_sessao, metodo (PIX, BOLETO ou CARTAO) e, se for CARTAO, cartao')
     if not dados.get('id_sessao'):
         raise ErroNegocio('id_sessao e obrigatorio')
+    return dados['id_sessao'], *ler_metodo(dados)
+
+
+def ler_metodo(dados):
+    """(metodo, cartao) do pedido, PIX por padrao; quem chama ja conferiu os outros campos."""
     metodo = dados.get('metodo', 'PIX')
     if metodo not in METODOS:
         raise ErroNegocio('metodo deve ser PIX, BOLETO ou CARTAO')
     if (metodo == 'CARTAO') != ('cartao' in dados):
         raise ErroNegocio('Envie cartao somente com metodo CARTAO')
-    return dados['id_sessao'], metodo, _ler_cartao(dados['cartao']) if metodo == 'CARTAO' else None
+    return metodo, _ler_cartao(dados['cartao']) if metodo == 'CARTAO' else None
 
 
 def _ler_cartao(cartao):
@@ -160,45 +165,57 @@ def criar_cobranca(paciente_id, papel, dados):
     if mesma:
         return mesma
 
+    if metodo == 'CARTAO':
+        return _pagar_cartao(sessao_id, profissional_id, inicio, centavos, cartao)
+    # O boleto vence no dia da consulta (ou hoje, se ela ja passou); o CPF do paciente precisa ter conta na Arkhé
+    id_cobranca, cobranca, _ = cobrar(metodo, centavos, cpf=cpf, vencimento=max(date.today(), inicio.date()))
+
+    with transacao() as cur:
+        cur.execute('INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS) VALUES (?, ?, ?, ?)',
+                    (sessao_id, id_cobranca, metodo, centavos))
+    return cobranca
+
+
+def cobrar(metodo, centavos, cartao=None, cpf=None, vencimento=None):
+    """Cobra na Arkhé (consulta ou assinatura): (id na Arkhé, resposta para o front, taxa da Arkhé em centavos).
+
+    Pix e boleto voltam pendentes; o cartao volta aprovado ou levanta ErroNegocio. So o credito tem taxa."""
     # Arkhé recebe reais; VALOR_CENTAVOS permanece inteiro no banco.
     valor = float(Decimal(str(centavos)) / 100)
     if metodo == 'CARTAO':
-        return _pagar_cartao(sessao_id, profissional_id, inicio, centavos, {**cartao, 'valor': valor})
+        status, resposta = _arkhe_request('POST', '/api/v1/vendas/cartao', {**cartao, 'valor': valor})
+        if status >= 400:
+            _recusa(status, resposta, 'Arkhé nao processou o cartao')
+        if resposta.get('aprovado') is not True:
+            raise ErroNegocio('Arkhé retornou uma venda invalida', 502)
+        _conferir(resposta, 'id_compra', centavos)
+        # A Arkhé fica com 5% no credito (taxa = valor - valor_recebido); na consulta, entra no financeiro do
+        # profissional (32); na assinatura, a plataforma absorve
+        taxa = _numero(resposta.get('taxa'))
+        taxa = int((Decimal(str(taxa)) * 100).quantize(Decimal('1'))) if taxa and taxa > 0 else None
+        return resposta['id_compra'], _apresentar(metodo, resposta), taxa
+
     corpo = {'valor': valor}
     if metodo == 'BOLETO':
-        # Vence no dia da consulta (ou hoje, se ela ja passou); o CPF do paciente precisa ter conta na Arkhé
-        corpo |= {'documento_pagador': cpf, 'data_vencimento': max(date.today(), inicio.date()).isoformat()}
+        corpo |= {'documento_pagador': cpf, 'data_vencimento': vencimento.isoformat()}
     status, resposta = _arkhe_request('POST', CAMINHOS[metodo], corpo)
     if status >= 400:
         _recusa(status, resposta, 'Arkhé nao criou a cobranca')
     _conferir(resposta, 'id_cobranca', centavos)
-
-    with transacao() as cur:
-        cur.execute('INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS) VALUES (?, ?, ?, ?)',
-                    (sessao_id, resposta['id_cobranca'], metodo, centavos))
-    return _apresentar(metodo, resposta)
+    return resposta['id_cobranca'], _apresentar(metodo, resposta), None
 
 
-def _pagar_cartao(sessao_id, profissional_id, inicio, centavos, venda):
-    status, resposta = _arkhe_request('POST', '/api/v1/vendas/cartao', venda)
-    if status >= 400:
-        _recusa(status, resposta, 'Arkhé nao processou o cartao')
-    if resposta.get('aprovado') is not True:
-        raise ErroNegocio('Arkhé retornou uma venda invalida', 502)
-    _conferir(resposta, 'id_compra', centavos)
-
+def _pagar_cartao(sessao_id, profissional_id, inicio, centavos, cartao):
+    id_compra, venda, taxa = cobrar('CARTAO', centavos, cartao)
     # ponytail: se o INSERT falhar apos a aprovacao, a venda fica so na Arkhé (o 500 vai para o log); repetir
     # nao cobra de novo, porque ela recusa venda igual por 5 minutos
-    # A Arkhé fica com 5% no credito (taxa = valor - valor_recebido); entra no financeiro do profissional (32)
-    taxa = _numero(resposta.get('taxa'))
-    taxa = int((Decimal(str(taxa)) * 100).quantize(Decimal('1'))) if taxa and taxa > 0 else None
     with transacao() as cur:
         cur.execute('''INSERT INTO PAGAMENTO (SESSAO_ID, ID_COBRANCA_ARKHE, METODO, VALOR_CENTAVOS, STATUS, PAGO_EM,
                 TAXA_ARKHE_CENTAVOS)
-            VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP, ?)''', (sessao_id, resposta['id_compra'], centavos, taxa))
-        emails = _sessao_paga(cur, sessao_id, profissional_id, inicio, 'CARTAO', resposta['id_compra'])
+            VALUES (?, ?, 'CARTAO', ?, 'PAGO', CURRENT_TIMESTAMP, ?)''', (sessao_id, id_compra, centavos, taxa))
+        emails = _sessao_paga(cur, sessao_id, profissional_id, inicio, 'CARTAO', id_compra)
     notificacoes_service.enviar_emails(emails)
-    return _apresentar('CARTAO', resposta)
+    return venda
 
 
 def _pagamento_do_participante(cur, usuario_id, id_cobranca, metodos):
@@ -217,19 +234,29 @@ def consultar_cobranca(usuario_id, id_cobranca):
     with transacao() as cur:
         metodo, status_local, *sessao = _pagamento_do_participante(cur, usuario_id, id_cobranca, tuple(CAMINHOS))
 
+    cobranca = consultar_arkhe(metodo, id_cobranca)
+    if cobranca['status'] == 1 and status_local == 'PENDENTE':
+        _confirmar(metodo, id_cobranca, *sessao)
+    return cobranca
+
+
+def consultar_arkhe(metodo, id_cobranca):
+    """Cobranca Pix ou boleto como a Arkhé a ve agora: status 0 (pendente) ou 1 (pago)."""
     status, resposta = _arkhe_request('GET', f'{CAMINHOS[metodo]}/{id_cobranca}')
     if status >= 400:
         raise ErroNegocio('Arkhé nao consultou a cobranca', 502, detalhes=resposta)
     if resposta.get('status') not in (0, 1):
         raise ErroNegocio('Arkhé retornou status de pagamento desconhecido', 502)
-    if resposta['status'] == 1 and status_local == 'PENDENTE':
-        _confirmar(metodo, id_cobranca, *sessao)
     return _apresentar(metodo, resposta)
 
 
 def boleto_pdf(usuario_id, id_cobranca):
     with transacao() as cur:
         _pagamento_do_participante(cur, usuario_id, id_cobranca, ('BOLETO',))
+    return pdf_boleto(id_cobranca)
+
+
+def pdf_boleto(id_cobranca):
     status, pdf = _arkhe_request('GET', f'/api/v1/cobrancas/boletos/{id_cobranca}/pdf', bruto=True)
     if status >= 400:
         raise ErroNegocio('Arkhé nao gerou o PDF do boleto', 502, detalhes=pdf)

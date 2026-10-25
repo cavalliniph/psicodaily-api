@@ -174,3 +174,15 @@ def test_pagamentos_sem_chamar_a_arkhe(anonimo, paciente, profissional):
     checar(profissional.post('/api/admin/repasses'), 403, 'error')
     # Webhook do WAHA sem assinatura valida
     checar(anonimo.post('/api/whatsapp/webhook', json={'event': 'message'}), 401, 'error')
+
+
+def test_assinaturas_sem_chamar_a_arkhe(anonimo, paciente, profissional):
+    checar(anonimo.get('/api/assinaturas/planos'), 200, 'planos')
+    checar(anonimo.get('/api/assinaturas/me'), 401, 'error')
+    checar(paciente.get('/api/assinaturas/me'), 403, 'error')
+    checar(profissional.get('/api/assinaturas/me'), 200, 'assinatura')
+    checar(profissional.post('/api/assinaturas/me', json={}), 400, 'error')
+    checar(paciente.post('/api/assinaturas/me/cancelar'), 403, 'error')
+    checar(profissional.get('/api/assinaturas/me/cobranca/999999/pdf'), 404, 'error')
+    checar(paciente.get('/api/profissionais/me/desempenho'), 403, 'error')
+    checar(profissional.get('/api/profissionais/me/desempenho'), 200, 'visualizacoes', 'consultas')

@@ -1,4 +1,5 @@
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from database.db import transacao
@@ -19,10 +20,12 @@ from funcao import (
 	obter_campo,
 	obter_dias_atendimento,
 )
-from services import disponibilidade_service, preferencias_service
+from services import assinaturas_service, disponibilidade_service, preferencias_service
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
 from services.usuarios_service import criar_usuario_base, enviar_ativacao
+
+logger = logging.getLogger(__name__)
 
 LIMITE_PAGINACAO = 2147483647
 
@@ -43,12 +46,15 @@ COLUNAS_PROFISSIONAL = """
 	 , p.VIDEO_URL
 	 , a.MEDIA AS AVALIACAO
 	 , COALESCE(a.TOTAL, 0) AS TOTAL_AVALIACOES
+	 , asn.PLANO
 """
 
 # Tabela derivada evita GROUP BY com DESCRICAO (BLOB); o CAST impede o AVG de SMALLINT truncar.
+# Sem assinatura valida (9) o profissional nao aparece na busca, no detalhe nem nos recomendados.
 ORIGEM_PROFISSIONAL = """
 FROM PROFISSIONAL p
 INNER JOIN USUARIO u ON u.ID_USUARIO = p.USUARIO_ID
+INNER JOIN ASSINATURA asn ON asn.PROFISSIONAL_ID = p.USUARIO_ID AND asn.VALIDA_ATE >= CURRENT_DATE
 LEFT JOIN (
 	SELECT PROFISSIONAL_ID,
 		   AVG(CAST(NOTA AS NUMERIC(5,2))) AS MEDIA,
@@ -80,6 +86,8 @@ ORDENACOES = {
 	'avaliacao': "a.MEDIA DESC NULLS LAST, u.ID_USUARIO",
 	'experiencia': "p.ANO_INICIO_ATUACAO NULLS LAST, u.ID_USUARIO",
 }
+# Sem ordenar=, o Premium vem primeiro (destaque patrocinado); a ordem escolhida pelo paciente nao muda
+ORDEM_PADRAO = "CASE WHEN asn.PLANO = 'PREMIUM' THEN 0 ELSE 1 END, u.ID_USUARIO"
 
 
 def _apresentar_perfil(profissional):
@@ -96,6 +104,11 @@ def serializar_profissional(colunas, linha):
 	avaliacao = profissional['avaliacao']
 	profissional['avaliacao'] = round(float(avaliacao), 1) if avaliacao is not None else None
 	profissional['foto_url'] = upload_service.url_foto_usuario(profissional['id_usuario'])
+	# O plano nao sai na API: so o selo do Premium e o video, que e do Profissional para cima
+	plano = profissional.pop('plano')
+	profissional['patrocinado'] = plano == 'PREMIUM'
+	if not assinaturas_service.libera(plano, 'PROFISSIONAL'):
+		profissional['video_url'] = None
 	return _apresentar_perfil(profissional)
 
 
@@ -256,7 +269,7 @@ def _filtros(args):
 		filtros += " AND " + na_agenda
 		params.extend(parametros_agenda)
 
-	return filtros, params, page, page_size, ORDENACOES.get(ordenar, "u.ID_USUARIO")
+	return filtros, params, page, page_size, ORDENACOES.get(ordenar, ORDEM_PADRAO)
 
 
 def buscar(args):
@@ -290,7 +303,70 @@ def detalhe(id_profissional):
 		resultado = cur.fetchone()
 		if resultado is None:
 			raise ErroNegocio('Profissional não encontrado', 404)
-		return serializar_profissional([desc[0].lower() for desc in cur.description], resultado)
+		profissional = serializar_profissional([desc[0].lower() for desc in cur.description], resultado)
+	_contar_visita(id_profissional)
+	return profissional
+
+
+def _contar_visita(id_profissional):
+	"""Visualizacoes do perfil (plano Profissional). Melhor esforco, em transacao propria: duas visitas ao mesmo
+	tempo podem dar conflito de update no Firebird, e perder uma contagem nao pode derrubar o perfil.
+
+	ponytail: conta tambem a visita do proprio profissional e de quem recarrega a pagina
+	"""
+	try:
+		with transacao() as cur:
+			cur.execute('''MERGE INTO VISUALIZACAO_PERFIL v
+				USING (SELECT CAST(? AS INTEGER) AS PROFISSIONAL_ID FROM RDB$DATABASE) n
+				ON v.PROFISSIONAL_ID = n.PROFISSIONAL_ID AND v.DIA = CURRENT_DATE
+				WHEN MATCHED THEN UPDATE SET TOTAL = v.TOTAL + 1
+				WHEN NOT MATCHED THEN INSERT (PROFISSIONAL_ID, DIA, TOTAL) VALUES (n.PROFISSIONAL_ID, CURRENT_DATE, 1)''',
+						(id_profissional,))
+	except Exception:
+		logger.warning('Visita ao perfil %s nao contada', id_profissional, exc_info=True)
+
+
+PERIODOS_DESEMPENHO = ('7', '30', '90')
+
+
+def _indicadores(cur, profissional_id, inicio, fim):
+	"""Numeros do periodo [inicio, fim], datas inclusivas."""
+	de = datetime.combine(inicio, datetime.min.time())
+	ate = datetime.combine(fim + timedelta(days=1), datetime.min.time())
+	cur.execute('''SELECT DIA, TOTAL FROM VISUALIZACAO_PERFIL WHERE PROFISSIONAL_ID = ? AND DIA BETWEEN ? AND ?
+		ORDER BY DIA''', (profissional_id, inicio, fim))
+	por_dia = [{'dia': dia.isoformat(), 'total': total} for dia, total in cur.fetchall()]
+	# Sessoes pela data em que acontecem, como nas metricas do admin
+	cur.execute('''SELECT STATUS, COUNT(*) FROM SESSAO WHERE PROFISSIONAL_ID = ?
+		AND DATA_HORA_INICIO >= ? AND DATA_HORA_INICIO < ? GROUP BY STATUS''', (profissional_id, de, ate))
+	consultas = {**dict.fromkeys(('AGENDADO', 'CONFIRMADO', 'REALIZADO', 'CANCELADO'), 0), **dict(cur.fetchall())}
+	cur.execute('SELECT COUNT(*) FROM SESSAO WHERE PROFISSIONAL_ID = ? AND CRIADO_EM >= ? AND CRIADO_EM < ?',
+				(profissional_id, de, ate))
+	agendamentos = cur.fetchone()[0]
+	cur.execute('SELECT COUNT(*) FROM FAVORITO WHERE PROFISSIONAL_ID = ? AND CRIADO_EM >= ? AND CRIADO_EM < ?',
+				(profissional_id, de, ate))
+	return {'visualizacoes': sum(d['total'] for d in por_dia), 'visualizacoes_por_dia': por_dia,
+			'consultas': consultas, 'agendamentos_feitos': agendamentos, 'novos_favoritos': cur.fetchone()[0]}
+
+
+def desempenho(profissional_id, dias):
+	"""Relatorio do plano Profissional; o Premium soma a conversao e o periodo anterior para comparar."""
+	if dias not in PERIODOS_DESEMPENHO:
+		raise ErroNegocio('dias deve ser 7, 30 ou 90')
+	fim = date.today()
+	inicio = fim - timedelta(days=int(dias) - 1)
+	with transacao() as cur:
+		assinaturas_service.exigir(cur, profissional_id, 'PROFISSIONAL')
+		relatorio = {'dias': int(dias), 'data_inicio': inicio.isoformat(), **_indicadores(cur, profissional_id, inicio, fim)}
+		if not assinaturas_service.libera(assinaturas_service.plano_ativo(cur, profissional_id), 'PREMIUM'):
+			return relatorio
+		anterior = _indicadores(cur, profissional_id, inicio - timedelta(days=int(dias)), inicio - timedelta(days=1))
+	del anterior['visualizacoes_por_dia']
+	visualizacoes = relatorio['visualizacoes']
+	# Agendamentos feitos por visualizacao do perfil no periodo
+	relatorio['conversao'] = round(relatorio['agendamentos_feitos'] / visualizacoes, 4) if visualizacoes else None
+	relatorio['periodo_anterior'] = anterior
+	return relatorio
 
 
 def _vazio(valor):
@@ -371,6 +447,7 @@ def cadastrar(formulario, imagem):
 		cur.execute(f"INSERT INTO PROFISSIONAL ({', '.join(colunas)}) VALUES ({', '.join('?' * len(colunas))})",
 					tuple(colunas.values()))
 		disponibilidade_service.gravar(cur, usuario["id_usuario"], disponibilidade_service.janelas_do_cadastro(dias_atendimento))
+		assinaturas_service.iniciar_gratis(cur, usuario["id_usuario"])
 	enviar_ativacao(usuario)
 
 	return {

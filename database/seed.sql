@@ -25,6 +25,9 @@ INSERT INTO PROFISSIONAL (USUARIO_ID, CONSELHO_TIPO, CONSELHO_NUMERO, ESPECIALID
                           MODALIDADE, IDIOMAS) VALUES
     (24, 'CRM', 'SP/654321', 'Psiquiatria', 30000, 'Psiquiatria clinica e acompanhamento medicamentoso.',
      'ONLINE', 'Português,Inglês');
+-- Premium sem vencimento: os testes antigos (video, conteudos, lista de espera, busca) nao dependem do plano
+INSERT INTO ASSINATURA (PROFISSIONAL_ID, PLANO, VALIDA_ATE) VALUES (22, 'PREMIUM', '2099-12-31');
+INSERT INTO ASSINATURA (PROFISSIONAL_ID, PLANO, VALIDA_ATE) VALUES (24, 'PREMIUM', '2099-12-31');
 
 INSERT INTO REGISTRO (USUARIO_ID, HUMOR, QUALIDADE_SONO, MINUTOS_SONO, EXERCICIO_FISICO, ANOTACAO, CRIADO_EM) VALUES
     (23, 'BOM', 'BOA', 450, TRUE, 'Registro de exemplo.', DATEADD(-2 DAY TO CURRENT_DATE));

@@ -5,7 +5,8 @@ from services import email_service, whatsapp_service
 from services.erros import ErroNegocio
 
 TIPOS = {'VAGA_LISTA_ESPERA', 'PAGAMENTO_CONFIRMADO', 'PAGAMENTO_RECEBIDO', 'SESSAO_AGENDADA', 'SESSAO_ALTERADA',
-         'SESSAO_CANCELADA', 'LEMBRETE_CONSULTA', 'REEMBOLSO_PAGO', 'REPASSE_PAGO'}
+         'SESSAO_CANCELADA', 'LEMBRETE_CONSULTA', 'REEMBOLSO_PAGO', 'REPASSE_PAGO',
+         'ASSINATURA_RENOVACAO', 'ASSINATURA_ATIVA'}
 
 
 def notificar(cur, usuario_id, tipo, titulo, mensagem, dados=None):
