@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from apoio import OUTRO_PACIENTE, PACIENTE, PROFISSIONAL, executar
+from apoio import PROFISSIONAL, executar
 from services import notificacoes_service
 
 DIA = date.today() + timedelta(days=3)
