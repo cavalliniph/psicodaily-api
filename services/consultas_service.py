@@ -1,7 +1,10 @@
+import json
+import logging
 import os
 import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 import fdb
 
@@ -11,6 +14,8 @@ from services import (assinaturas_service, disponibilidade_service, email_servic
 from services.auditoria_service import auditar
 from services.erros import ErroNegocio
 from services.upload_service import upload_service
+
+logger = logging.getLogger(__name__)
 
 MENSAGEM_CONFLITO = 'Profissional ou paciente ja possui consulta nesse horario'
 # 24: o paciente cancela com reembolso integral ate 15 min antes; depois disso nao cancela mais
@@ -366,6 +371,38 @@ def sala_da_sessao(id_usuario, sessao_id):
             or inicio > agora.replace(second=0, microsecond=0) + timedelta(minutes=15) or fim < agora):
         return None
     return {'sessao_id': sessao_id, 'inicio': inicio, 'participantes': participantes}
+
+
+# 23: STUN descobre o IP publico de cada lado e basta na maioria das redes. Em NAT simetrico (4G, rede de
+# empresa) a conexao direta falha e o TURN retransmite a midia. Cloudflare Realtime: 1.000 GB/mes gratis.
+STUN_PUBLICO = [{'urls': 'stun:stun.cloudflare.com:3478'}]
+URL_TURN = 'https://rtc.live.cloudflare.com/v1/turn/keys/{}/credentials/generate-ice-servers'
+# Cobre a consulta mais longa (120 min) mais os 15 min de antecedencia. A credencial vai para o navegador,
+# entao quanto mais curta, menos tempo alguem consegue usar a nossa cota se ela vazar.
+TURN_VALIDADE_SEGUNDOS = 3 * 60 * 60
+
+
+def ice_servers(id_usuario, sessao_id):
+    """Lista de servidores para o RTCPeerConnection, so para quem pode entrar na sala agora."""
+    if not sala_da_sessao(id_usuario, sessao_id):
+        raise ErroNegocio('Sala indisponivel', 404)
+    chave = os.getenv('TURN_KEY_ID')
+    # Sem chave (dev, CI) a chamada segue so com STUN
+    if not chave:
+        return STUN_PUBLICO
+    req = Request(URL_TURN.format(chave), method='POST',
+                  data=json.dumps({'ttl': TURN_VALIDADE_SEGUNDOS}).encode(),
+                  headers={'Authorization': f'Bearer {os.getenv("TURN_KEY_API_TOKEN", "")}',
+                           'Content-Type': 'application/json',
+                           # A Cloudflare barra o User-Agent padrao do urllib (erro 1010, 403)
+                           'User-Agent': 'psicodaily-api'})
+    try:
+        with urlopen(req, timeout=10) as resposta:
+            return json.load(resposta)['iceServers']
+    except OSError:
+        # Cloudflare fora do ar nao pode impedir a consulta: sem TURN ela ainda conecta na maioria das redes
+        logger.exception('TURN da Cloudflare indisponivel')
+        return STUN_PUBLICO
 
 
 # ponytail: dedupe em memoria (processo unico); reinicio do servidor pode repetir um aviso

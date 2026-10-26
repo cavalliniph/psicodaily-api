@@ -1,6 +1,8 @@
 # Sobe o app numa porta local e conecta clientes WebSocket como o front.
+import io
 import json
 from datetime import datetime, timedelta
+from urllib.error import URLError
 
 import pytest
 import simple_websocket
@@ -114,3 +116,29 @@ def test_origem_estranha_e_recusada(conectar, emails, sessoes):
     sessao = nova_sessao(sessoes, agora - timedelta(minutes=5), agora + timedelta(minutes=50))
     assert fechado_pelo_servidor(conectar(PACIENTE, 'PACIENTE', sessao, 'https://site-malicioso.example'))
     assert receber(conectar(PACIENTE, 'PACIENTE', sessao, 'https://psicodaily-front.vercel.app'))['type'] == 'peers'
+
+
+def test_ice_servers(paciente, outro_paciente, sessoes, monkeypatch):
+    agora = datetime.now().replace(second=0, microsecond=0)
+    sessao = nova_sessao(sessoes, agora - timedelta(minutes=5), agora + timedelta(minutes=50))
+    rota = f'/api/consultas/{sessao}/ice-servers'
+
+    # Quem nao participa nao gasta a cota do TURN
+    assert outro_paciente.get(rota).status_code == 404
+
+    # Sem chave da Cloudflare (dev, CI): so STUN
+    monkeypatch.delenv('TURN_KEY_ID', raising=False)
+    assert paciente.get(rota).get_json() == {'ice_servers': consultas_service.STUN_PUBLICO}
+
+    # Com chave: devolve o que a Cloudflare gerou
+    monkeypatch.setenv('TURN_KEY_ID', 'chave')
+    da_cloudflare = [{'urls': ['turn:turn.cloudflare.com:3478'], 'username': 'u', 'credential': 'c'}]
+    monkeypatch.setattr(consultas_service, 'urlopen',
+                        lambda req, timeout: io.BytesIO(json.dumps({'iceServers': da_cloudflare}).encode()))
+    assert paciente.get(rota).get_json() == {'ice_servers': da_cloudflare}
+
+    # Cloudflare fora do ar: a consulta continua so com STUN
+    def fora_do_ar(req, timeout):
+        raise URLError('sem rede')
+    monkeypatch.setattr(consultas_service, 'urlopen', fora_do_ar)
+    assert paciente.get(rota).get_json() == {'ice_servers': consultas_service.STUN_PUBLICO}

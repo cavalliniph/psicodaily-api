@@ -34,6 +34,13 @@ def cancelar_consulta(dados_usuario, sessao_id):
     return jsonify({'message': 'Consulta cancelada', **resultado})
 
 
+@cons_bp.route('/<int:sessao_id>/ice-servers', methods=['GET'])
+@usuario_autenticado
+def ice_servers(dados_usuario, sessao_id):
+    servidores = consultas_service.ice_servers(dados_usuario.get('id_usuario'), sessao_id)
+    return jsonify({'ice_servers': servidores})
+
+
 @cons_bp.route('/<int:sessao_id>/avaliacao', methods=['POST'])
 @usuario_autenticado
 def avaliar_consulta(dados_usuario, sessao_id):
