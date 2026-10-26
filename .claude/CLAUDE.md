@@ -38,3 +38,5 @@ Full map (routes, data model, flows, known risks) in [architecture.md](architect
 - Error responses: `raise ErroNegocio(msg, status)` in services; a view may return `jsonify({'error': msg}), status` for request-shape errors.
 - Validate request bodies against allowed fields and domain values (see `services/registros_service.py`) and reject unknown fields. Never trust `usuario_id` from the body; take it from the token.
 - Commit messages: Conventional Commits in Portuguese (`feat: ...`, `fix: ...`).
+- Clean code: descriptive Portuguese names, small functions with one job, no dead code. Comments explain **why** (decision, limit, tradeoff), not what the line does, in plain Portuguese: the team is students and must understand the code it ships.
+- Explanations and reports to the team: short. Define every new technical term in one line on first use, or link a source to learn more (MDN, official docs).
