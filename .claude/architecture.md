@@ -149,6 +149,7 @@ if (resposta?.ok) peerConnection.setConfiguration({ iceServers: (await resposta.
   6. sobe o gunicorn em `:8000`.
 
   Se qualquer passo falhar, o container sai antes de receber tráfego. `GET /api/saude` é o readiness probe. `TZ=America/Sao_Paulo` (as rotas comparam com `datetime.now()` local).
+- **Acesso ao banco de produção (DBeaver)**: o serviço tem a porta privada `3050` (TCP, nunca pública no Northflank) e o `Dockerfile` faz o Firebird ouvir em `0.0.0.0`. Abrir o túnel: `northflank forward service --projectId psicodaily --serviceId psicodaily-api --skipHostnames`, que mostra o IP e a porta locais. No DBeaver: banco `/var/lib/firebird/data/BANCO.FDB`, `SYSDBA` com o `DB_PASSWORD` do secret group, driver property `encoding=UTF8`, conexão marcada como read-only. Desconectar ao terminar: transação esquecida aberta no Firebird impede a limpeza de versões antigas das linhas e deixa o banco lento.
 - **CI**: `.github/workflows/ci.yml` (Firebird 4 oficial em serviço, banco do zero com migrations + seed, `pytest`) em todo push e PR. Não faz deploy.
 - **Dev (WSL)**: `run.sh` sobe um gunicorn ouvindo em `127.0.0.1:8000` e `:8001`.
 - **Por que gthread e não gevent**: `fdb` chama `libfbclient` via ctypes, o que bloquearia o loop do gevent.
