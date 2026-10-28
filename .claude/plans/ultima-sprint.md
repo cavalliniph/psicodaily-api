@@ -17,9 +17,9 @@ Cada fase termina com os testes verdes. Cada domínio refatorado ou cada feature
 
 ## 0. Urgente (antes de qualquer código)
 
-O repositório `cavalliniph/psicodaily-api` é **público** no GitHub.
+O repositório `verk-team/psicodaily-api` (antes `cavalliniph/psicodaily-api`) é **público** no GitHub.
 
-1. **Revogar a senha de app do Gmail** `psicodaily.contato@gmail.com` (estava em `funcao.py:59`, hoje em `services/email_service.py`, desde o commit `5750063`). Gerar uma nova e colocá-la só no `.env` (item S1). Apagar do código não basta: ela já está no histórico público.
+1. **Revogar a senha de app do Gmail** `psicodaily.contato@gmail.com` (estava em `funcao.py:59`, depois em `services/email_service.py`, desde o commit `5750063`). Gerar uma nova e colocá-la só no `.env` (item S1). Apagar do código não basta: ela já está no histórico público. **Feito** (28/10/2026): `enviar_email` lê `SMTP_USER`/`SMTP_PASSWORD` do `.env` e do Northflank. Revogação descartada pelo time.
 2. **`database/BANCO.FDB` versionado e público** (a F0 tira o arquivo do git e da imagem daqui em diante): contém CPF, e-mail, telefone, hash de senha e diário de humor (dado de saúde, LGPD art. 11). Decidir com o time:
    - tornar o repo privado (mais rápido), **ou**
    - trocar o `.FDB` por um banco só com dados fictícios e reescrever o histórico (`git filter-repo --path database/BANCO.FDB --invert-paths`, com force push combinado com o time).

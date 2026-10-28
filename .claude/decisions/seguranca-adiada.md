@@ -13,7 +13,7 @@ Leitura completa de `app.py`, `funcao.py`, `util/`, `database/db.py`, `services/
 
 | # | Sev. | Onde | Problema | Correção |
 |---|---|---|---|---|
-| S1 | Crítica | `services/email_service.py::enviar_email` | Senha SMTP do Gmail no código, em repo público | Item 0.1 + `SMTP_USER`/`SMTP_PASSWORD` no `.env` |
+| S1 | Crítica | `services/email_service.py::enviar_email` | Senha SMTP do Gmail no código, em repo público | Item 0.1 + `SMTP_USER`/`SMTP_PASSWORD` no `.env`. **Feito** (28/10/2026): só no `.env` e no Northflank. Decisão do time: a senha não será revogada, então a que está no histórico público continua válida |
 | S2 | Crítica | `database/BANCO.FDB`, `usuarios/*.jpg` | Dados pessoais e de saúde reais no repo público | Item 0.2 |
 | S3 | ~~Alta~~ | `auth.py` `alterar_senha`, `verificar_codigo` | Código de 6 dígitos **sem expiração nem limite de tentativas**: dá para disparar `esqueci_senha` e testar 10⁶ códigos em `alterar_senha`, tomando qualquer conta pelo e-mail | **Feito** (20/10/2026): migration `0015_seguranca_auth`; recuperação expira em 15 min, ativação sem validade (não há reenvio), 5ª falha apaga o código, `compare_digest` |
 | S4 | ~~Alta~~ | `services/auth_service.py::gerar_token` | JWT **sem `exp`**: token roubado vale para sempre; logout, troca de senha e desativação não o invalidam | **Feito** (20/10/2026): `exp` 8h + `iat`, `auth_service.usuario_do_token` nos decorators e nos WS (recusa token sem `exp`, usuário inativo e `iat` < `SENHA_ALTERADA_EM`); troca logada devolve cookie novo. No deploy, todo mundo precisa logar de novo |

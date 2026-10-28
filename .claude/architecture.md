@@ -157,7 +157,7 @@ if (resposta?.ok) peerConnection.setConfiguration({ iceServers: (await resposta.
 ## Pontos de atenção
 
 - Checkup de segurança de 19/10/2026 em `decisions/seguranca-adiada.md` (achados S1–S23, adiados em 20/10/2026 até as features ficarem prontas). Os mais graves:
-  - Repo **público** com a senha SMTP do Gmail hard-coded em `services/email_service.py` (`enviar_email`) e com o `BANCO.FDB`, que tem dados reais.
+  - Repo **público** com o `BANCO.FDB` (dados reais) no histórico. A senha SMTP do Gmail saiu do código para `SMTP_USER`/`SMTP_PASSWORD` (S1, 28/10/2026), mas continua no histórico e válida (o time decidiu não revogar).
   - ~~Código sem expiração nem limite de tentativas~~: resolvido (S3). Sem rate limit (S11), pedir códigos novos ainda permite tentar 5 por e-mail enviado.
   - ~~JWT sem `exp`~~: resolvido (S4). Logout ainda não revoga o token no servidor (refresh token e sessões ficam para a feature 10).
   - ~~`GET /api/encaminhamentos` lista os de todos os profissionais~~: resolvido (S5/S6).

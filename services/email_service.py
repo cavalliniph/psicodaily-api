@@ -1,3 +1,4 @@
+import logging
 import os
 import smtplib
 import threading
@@ -6,10 +7,17 @@ from email.mime.text import MIMEText
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+logger = logging.getLogger(__name__)
+
 
 def enviar_email(destinatario, assunto, mensagem, html=None):
-        user = "psicodaily.contato@gmail.com"
-        senha = "hmdk zazs yrxn gylf"
+        # Credenciais so no ambiente (.env ou Northflank): no codigo elas vazavam pelo repo publico (S1)
+        user = os.getenv('SMTP_USER')
+        senha = os.getenv('SMTP_PASSWORD')
+        if not user or not senha:
+            # Dev e CI sem credencial nao enviam; o aviso no log mostra se faltar em producao
+            logger.warning('SMTP_USER/SMTP_PASSWORD ausentes: e-mail para %s nao enviado', destinatario)
+            return
 
         if html:
             msg = MIMEMultipart("alternative")
